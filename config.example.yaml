@@ -1,0 +1,70 @@
+# Configuración del lector RSS.
+# Cópialo a ~/.config/rss/config.yaml y ajusta lo que necesites.
+# También se puede apuntar con la variable de entorno RSS_CONFIG.
+
+db_path: ~/.local/share/rss/rss.db
+device_name: portatil
+
+fetch:
+  concurrency: 16              # descargas simultáneas
+  timeout_seconds: 30
+  default_interval_seconds: 1800
+  max_interval_seconds: 86400  # tope del backoff cuando un feed no publica
+  full_text_default: false     # extraer el artículo completo de todos los feeds
+
+# ---------------------------------------------------------------- hub
+# El hub NO se expone a Internet: escucha en la IP de la tailnet.
+hub:
+  host: 127.0.0.1              # pon aquí la IP de Tailscale del servidor
+  port: 8787
+  tokens:
+    - cambia-esto-por-un-token-largo-y-aleatorio
+  compact_at_hour: 4           # compactación nocturna del diario de cambios
+
+# Lo que usan los clientes para sincronizar
+hub_url: http://hub.tu-tailnet.ts.net:8787
+hub_token: cambia-esto-por-un-token-largo-y-aleatorio
+
+# ---------------------------------------------------------------- Obsidian
+obsidian:
+  vault_path: ~/Documentos/Boveda
+  notes_subdir: Clippings
+  attachments_subdir: Clippings/attachments
+  # En false, las notas quedan con las imágenes enlazadas a la web original.
+  # Ponlo en true si quieres que el recorte funcione sin conexión.
+  download_images: false
+  filename_template: "{{ date }} - {{ title }}"
+
+# ---------------------------------------------------------------- Kindle
+# Se envía EPUB: Amazon retiró el soporte de MOBI en Send-to-Kindle en 2022.
+# Dos requisitos que el código no puede comprobar por ti:
+#   1. `from_address` debe estar dado de alta en los remitentes aprobados de
+#      Amazon («Personal Document Settings»), o el correo se descarta en silencio.
+#   2. Si tu proveedor tiene 2FA, aquí va una contraseña de aplicación, no la tuya.
+smtp:
+  host: smtp.disroot.org
+  port: 587
+  username: tu-usuario
+  password: usa-una-contrasena-de-aplicacion
+  use_tls: true                # STARTTLS
+  use_ssl: false               # ponlo a true y port 465 para SMTPS
+  from_address: tu-correo@disroot.org
+  kindle_address: tu-nombre@kindle.com
+
+# ---------------------------------------------------------------- revistas
+magazine:
+  title: Mi revista
+  author: rsscore
+  language: es
+  output_dir: ~/Documentos/revistas   # por omisión: ~/.local/share/rss/revistas
+  # Con imágenes incrustadas, 200 artículos dan un EPUB pesado; para enviarlo al
+  # Kindle conviene bajar a 30-50 (si se pasa del límite se trocea solo).
+  max_articles: 50
+  embed_images: true
+  max_image_width: 1200
+
+# ---------------------------------------------------------------- avisos
+notify:
+  desktop_enabled: true
+  ntfy_url: http://hub.tu-tailnet.ts.net:8080/rss-alertas
+  ntfy_token: ""

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel>
+  <title>Diario de Ejemplo</title>
+  <link>https://ejemplo.org</link>
+  <description>Noticias de prueba</description>
+  <item>
+    <title>Primera noticia sobre Rust</title>
+    <link>https://ejemplo.org/1</link>
+    <guid isPermaLink="false">art-1</guid>
+    <pubDate>Mon, 17 Aug 2026 10:00:00 +0000</pubDate>
+    <author>ana@ejemplo.org (Ana)</author>
+    <description><![CDATA[<p>Un párrafo con <b>formato</b>.</p><script>alert(1)</script><img src="/pixel.gif" width="1" height="1"/>]]></description>
+  </item>
+  <item>
+    <title>Segunda noticia</title>
+    <link>https://ejemplo.org/2</link>
+    <guid isPermaLink="false">art-2</guid>
+    <pubDate>Mon, 17 Aug 2026 11:00:00 +0000</pubDate>
+    <description>Texto plano sin etiquetas</description>
+  </item>
+</channel></rss>

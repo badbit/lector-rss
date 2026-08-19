@@ -1,0 +1,22 @@
+{#- Un artículo dentro del EPUB.
+
+    Se genera como documento XHTML completo para que valga por sí solo, pero
+    ebooklib se queda solo con el <body> y reconstruye la cabecera con su propia
+    plantilla EPUB 3 (ahí es donde entra el enlace a la hoja de estilo). -#}
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="{{ language }}" lang="{{ language }}">
+<head>
+  <meta charset="utf-8" />
+  <title>{{ title }}</title>
+  <link rel="stylesheet" type="text/css" href="{{ css_href }}" />
+</head>
+<body>
+<div class="articulo">
+  <h1 class="titulo">{{ title }}</h1>
+  <p class="meta">{{ meta_line }}</p>
+  {{ body|safe }}
+  {%- if url %}
+  <p class="fuente">Fuente: <a href="{{ url }}">{{ url }}</a></p>
+  {%- endif %}
+</div>
+</body>
+</html>

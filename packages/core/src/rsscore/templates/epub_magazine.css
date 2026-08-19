@@ -1,0 +1,216 @@
+/* Hoja de estilo de los EPUB (Kindle y revistas).
+ *
+ * Escrita para tinta electrónica, que es el peor caso: pantalla pequeña, sin
+ * color y con un motor de CSS muy recortado. De ahí las ausencias deliberadas:
+ *   - ni `position`, ni `float`, ni `flex`: el Kindle los ignora o los rompe;
+ *   - ni `background-color`: en tinta electrónica sale gris sucio y consume
+ *     tinta en cada refresco;
+ *   - ni tipografías web (@font-face): el lector usa la suya y el fichero
+ *     engordaría para nada;
+ *   - ni tamaños en px: el usuario manda sobre el tamaño de letra, así que todo
+ *     va en em/rem y en porcentajes.
+ */
+
+body {
+  font-family: Georgia, "Times New Roman", "Liberation Serif", serif;
+  line-height: 1.5;
+  margin: 0;
+  padding: 0;
+  text-align: justify;
+  -webkit-hyphens: auto;
+  hyphens: auto;
+  widows: 2;
+  orphans: 2;
+}
+
+/* --------------------------------------------------------------- titulares */
+h1, h2, h3, h4, h5, h6 {
+  font-family: "Helvetica Neue", Helvetica, Arial, "Liberation Sans", sans-serif;
+  line-height: 1.25;
+  text-align: left;
+  -webkit-hyphens: none;
+  hyphens: none;
+  page-break-after: avoid;
+  break-after: avoid;
+  margin: 1em 0 0.4em 0;
+}
+
+h1 { font-size: 1.5em; margin-top: 0; }
+h2 { font-size: 1.25em; }
+h3 { font-size: 1.1em; }
+h4, h5, h6 { font-size: 1em; }
+
+/* Cada artículo empieza en página nueva: es lo que hace que el libro se pueda
+ * hojear con los botones de "capítulo siguiente" del lector. */
+.articulo {
+  page-break-before: always;
+  break-before: page;
+}
+
+.titulo {
+  font-size: 1.45em;
+  margin-bottom: 0.2em;
+}
+
+/* Cabecera del artículo: feed, autor y fecha. */
+.meta {
+  font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+  font-size: 0.8em;
+  font-style: normal;
+  text-align: left;
+  margin: 0 0 1.2em 0;
+  padding-bottom: 0.5em;
+  border-bottom: 1px solid #999999;
+}
+
+.fuente {
+  font-size: 0.75em;
+  text-align: left;
+  margin-top: 2em;
+  padding-top: 0.5em;
+  border-top: 1px solid #999999;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}
+
+/* ------------------------------------------------------------------ cuerpo */
+p {
+  margin: 0 0 0.35em 0;
+  text-indent: 1.2em;
+}
+
+/* El primer párrafo de una sección no lleva sangría francesa. */
+h1 + p, h2 + p, h3 + p, .meta + p, blockquote p:first-child, li p:first-child {
+  text-indent: 0;
+}
+
+a {
+  color: inherit;
+  text-decoration: underline;
+}
+
+blockquote {
+  margin: 1em 0 1em 1em;
+  padding-left: 0.8em;
+  border-left: 2px solid #666666;
+  font-style: italic;
+}
+
+blockquote p { text-indent: 0; }
+
+ul, ol {
+  margin: 0.8em 0 0.8em 1.2em;
+  padding-left: 1em;
+  text-align: left;
+}
+
+li { margin-bottom: 0.3em; }
+
+/* Código: monoespaciada, sin justificar y con las líneas largas partidas, que
+ * en una pantalla de seis pulgadas no cabe casi nada. */
+pre {
+  font-family: "Courier New", "Liberation Mono", monospace;
+  font-size: 0.8em;
+  line-height: 1.35;
+  text-align: left;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  margin: 1em 0;
+  padding: 0.5em;
+  border: 1px solid #999999;
+  -webkit-hyphens: none;
+  hyphens: none;
+}
+
+code {
+  font-family: "Courier New", "Liberation Mono", monospace;
+  font-size: 0.9em;
+  -webkit-hyphens: none;
+  hyphens: none;
+}
+
+pre code { font-size: 1em; border: none; padding: 0; }
+
+hr {
+  border: none;
+  border-top: 1px solid #999999;
+  margin: 1.5em 20%;
+}
+
+/* ---------------------------------------------------------------- imágenes */
+img {
+  max-width: 100%;
+  height: auto;
+}
+
+figure {
+  margin: 1em 0;
+  text-align: center;
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
+
+figcaption {
+  font-size: 0.8em;
+  font-style: italic;
+  text-align: center;
+  text-indent: 0;
+  margin-top: 0.3em;
+}
+
+/* ------------------------------------------------------------------ tablas */
+table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.85em;
+  margin: 1em 0;
+}
+
+th, td {
+  border: 1px solid #999999;
+  padding: 0.3em 0.4em;
+  text-align: left;
+}
+
+/* ----------------------------------------------------------- portadilla/TOC */
+.portadilla { page-break-after: always; break-after: page; }
+
+.portadilla h1 {
+  font-size: 1.8em;
+  text-align: center;
+  margin-bottom: 0.1em;
+}
+
+.fecha {
+  text-align: center;
+  font-size: 0.9em;
+  margin: 0 0 1.5em 0;
+  text-indent: 0;
+}
+
+.resumen {
+  list-style: none;
+  margin: 0 0 1.5em 0;
+  padding: 0;
+  font-size: 0.9em;
+  text-align: center;
+}
+
+.resumen li { display: inline; margin: 0 0.5em; }
+
+.sumario h2 {
+  font-size: 1.05em;
+  margin-top: 1.2em;
+  border-bottom: 1px solid #999999;
+}
+
+.sumario ol {
+  list-style: decimal;
+  margin-left: 1.4em;
+}
+
+.sumario .firma {
+  font-size: 0.85em;
+  font-style: italic;
+}

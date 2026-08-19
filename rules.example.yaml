@@ -1,0 +1,55 @@
+# Reglas de filtrado y alertas.  Cárgalas con:  rss rules import rules.example.yaml
+#
+# Se evalúan en orden al ingerir cada artículo nuevo. Las comparaciones ignoran
+# mayúsculas y acentos por defecto: «energia» encuentra «Energía».
+
+- name: Silenciar patrocinados
+  # Va primero a propósito: `stop` corta la evaluación y evita que un
+  # publirreportaje dispare las alertas de más abajo.
+  when:
+    any:
+      - { field: title,   op: contains, value: patrocinado }
+      - { field: title,   op: contains, value: "contenido de marca" }
+      - { field: any,     op: matches,  value: '(?i)\b(sponsored|advertorial)\b' }
+  then:
+    - { mark_read: true }
+    - { tag: publicidad }
+    - { stop: true }
+
+- name: Alertas Rust
+  when:
+    any:
+      - { field: title,   op: matches,  value: '(?i)\brust\b' }
+      - { field: content, op: contains, value: cargo }
+  scope: { folders: [Dev] }
+  then:
+    - { tag: rust }
+    - { star: true }
+    - { notify: { priority: high } }
+
+- name: Vulnerabilidades graves
+  when:
+    all:
+      - { field: any, op: matches, value: '(?i)(CVE-\d{4}-\d+|zero.?day|0.?day)' }
+      - { field: any, op: matches, value: '(?i)(critic|crítico|remote code|RCE)' }
+  then:
+    - { tag: seguridad }
+    - { notify: { priority: high, title: "Vulnerabilidad grave" } }
+
+- name: Guardar en Obsidian lo largo de estos autores
+  when:
+    all:
+      - { field: author,  op: matches, value: '(?i)(jonathan corbet|ana pérez)' }
+      - { field: content, op: gt,      value: 4000 }   # sobre texto, `gt` mide caracteres
+  then:
+    - { tag: leer-luego }
+    - { export: { kind: obsidian, target: desktop } }
+
+- name: Descartar teletipos muy cortos
+  when:
+    all:
+      - { field: content, op: lt, value: 300 }
+      - { field: title,   op: not_contains, value: "última hora" }
+  scope: { folders: [Prensa] }
+  then:
+    - { mark_read: true }

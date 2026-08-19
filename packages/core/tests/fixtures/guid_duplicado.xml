@@ -1,0 +1,6 @@
+<?xml version="1.0"?>
+<rss version="2.0"><channel>
+  <title>Duplicados</title>
+  <item><title>Uno</title><link>https://d.example/1</link><guid>mismo</guid><description>A</description></item>
+  <item><title>Dos</title><link>https://d.example/2</link><guid>mismo</guid><description>B</description></item>
+</channel></rss>

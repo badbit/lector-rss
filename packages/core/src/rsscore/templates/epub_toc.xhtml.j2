@@ -1,0 +1,43 @@
+{#- Portadilla y sumario del EPUB.
+
+    Es la primera página que se abre después de la portada: el título, la fecha,
+    las cifras del número (artículos, palabras, tiempo de lectura) y el índice
+    completo agrupado por secciones. Duplica a propósito lo que ya está en
+    nav.xhtml: el índice del lector se navega con menús, y esto se lee. -#}
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="{{ language }}" lang="{{ language }}">
+<head>
+  <meta charset="utf-8" />
+  <title>{{ title }}</title>
+  <link rel="stylesheet" type="text/css" href="{{ css_href }}" />
+</head>
+<body>
+<div class="portadilla">
+  <h1>{{ title }}</h1>
+  <p class="fecha">{{ date }}</p>
+  {%- if meta %}
+  <ul class="resumen">
+    {%- for etiqueta, valor in meta %}
+    <li>{{ etiqueta }}: {{ valor }}</li>
+    {%- endfor %}
+  </ul>
+  {%- endif %}
+  <div class="sumario">
+    {%- for seccion in sections %}
+    {%- if seccion.name %}
+    <h2>{{ seccion.name }}</h2>
+    {%- endif %}
+    <ol>
+      {%- for articulo in seccion.articles %}
+      <li>
+        <a href="{{ articulo.href }}">{{ articulo.title }}</a>
+        {%- if articulo.author %}
+        <span class="firma"> — {{ articulo.author }}</span>
+        {%- endif %}
+      </li>
+      {%- endfor %}
+    </ol>
+    {%- endfor %}
+  </div>
+</div>
+</body>
+</html>

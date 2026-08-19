@@ -1,0 +1,11 @@
+<?xml version="1.0"?>
+<rss version="2.0"><channel>
+  <title>Truncado</title>
+  <item>
+    <title>Artículo recortado</title>
+    <link>https://trunc.example/articulo</link>
+    <guid>t-1</guid>
+    <pubDate>Mon, 17 Aug 2026 09:00:00 +0000</pubDate>
+    <description>Este resumen se corta a mitad y termina con… Seguir leyendo</description>
+  </item>
+</channel></rss>

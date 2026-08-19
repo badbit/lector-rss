@@ -1,0 +1,28 @@
+[project]
+name = "rss-workspace"
+version = "0.1.0"
+description = "Lector RSS multiplataforma: nucleo Python, hub headless y clientes"
+requires-python = ">=3.12"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+# RUF001-003: los textos y comentarios van en español, con acentos y comillas
+# tipográficas; no son homoglifos sospechosos.
+ignore = ["B008", "RUF001", "RUF002", "RUF003"]
+
+[tool.ruff.lint.per-file-ignores]
+# En las pruebas es habitual desempaquetar una fixture y usar solo parte.
+"**/tests/**" = ["RUF059", "F841"]
+
+[tool.pytest.ini_options]
+testpaths = ["packages/core/tests", "packages/hub/tests", "packages/desktop/tests"]
+asyncio_mode = "auto"
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true

@@ -1,0 +1,17 @@
+{#- Nota de Obsidian.
+
+    `frontmatter` llega ya serializado con yaml.safe_dump: aquí NO se interpola
+    ningún campo suelto dentro del bloque YAML, porque un título con dos puntos
+    o con comillas rompería la nota entera. -#}
+---
+{{ frontmatter }}---
+
+# {{ title }}
+
+{% if source -%}
+*[{{ feed }}]({{ source }})*{% if author %} · {{ author }}{% endif %}{% if published_human %} · {{ published_human }}{% endif %}
+{%- else -%}
+*{{ feed }}*{% if author %} · {{ author }}{% endif %}{% if published_human %} · {{ published_human }}{% endif %}
+{%- endif %}
+
+{{ body }}

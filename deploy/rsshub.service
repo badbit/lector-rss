@@ -1,0 +1,23 @@
+# Hub como servicio de usuario:
+#   mkdir -p ~/.config/systemd/user && cp rsshub.service ~/.config/systemd/user/
+#   systemctl --user enable --now rsshub
+#   loginctl enable-linger $USER     # para que siga vivo sin sesión abierta
+[Unit]
+Description=Hub de sincronización del lector RSS
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=RSS_CONFIG=%h/.config/rss/config.yaml
+ExecStart=%h/Offline/rss/.venv/bin/rsshub
+Restart=on-failure
+RestartSec=10
+# El hub no necesita más permisos de los justos.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=%h/.local/share/rss
+
+[Install]
+WantedBy=default.target
