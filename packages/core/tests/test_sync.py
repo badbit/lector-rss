@@ -22,6 +22,7 @@ from rsscore.sync import (
     build_snapshot,
     compact_change_log,
     filter_ops_for_scope,
+    is_entry_in_scope,
     min_client_seq,
     replay_pending,
 )
@@ -227,6 +228,70 @@ def test_ambito_deja_fuera_lo_antiguo_pero_no_lo_guardado(escenario):
     ids = {op.entity_id for op in filtradas}
     assert "VIEJA" not in ids, "un artículo leído de hace un año no debe viajar al móvil"
     assert "VIEJAGUARDADA" in ids, "lo guardado entra en el ámbito aunque sea antiguo"
+
+
+def test_marcar_leido_lo_antiguo_llega_igual_al_movil(escenario):
+    """La operación que saca una entrada del ámbito tiene que viajar igualmente.
+
+    El ámbito del móvil es «los últimos N días, más lo guardado y lo que esté sin
+    leer», así que un artículo viejo y sin leer SÍ está replicado. Al marcarlo
+    leído en el escritorio deja de cumplir las tres condiciones a la vez: si esa
+    operación se filtrase por el estado ya aplicado, el móvil no se enteraría
+    nunca y lo tendría sin leer para siempre.
+    """
+    hub, a, b, _, feed = escenario
+    antiguo = now_ms() - 400 * 86_400_000
+
+    viejo = Entry(
+        id="VIEJASINLEER", feed_id=feed.id, guid_hash=hash_guid(feed.id, "oldunread"),
+        content_hash=hash_content("oldunread"), title="Viejo y sin leer",
+        published_at=antiguo,
+    )
+    repo.insert_entry(hub.conn, viejo)
+
+    scope = SyncScope(days=30, include_starred=True, include_unread=True)
+    # Sin leer y antiguo: está dentro del ámbito, el móvil lo tiene.
+    assert is_entry_in_scope(hub.conn, viejo.id, scope)
+
+    repo.set_read(hub.conn, [viejo.id], True)
+    assert not is_entry_in_scope(hub.conn, viejo.id, scope), (
+        "una vez leído ya no cumple ninguna de las tres condiciones"
+    )
+
+    ops, _, _ = repo.changes_since(hub.conn, 0, 10_000)
+    filtradas = filter_ops_for_scope(hub.conn, ops, scope)
+
+    assert any(
+        op.entity_id == viejo.id and op.field == "read" for op in filtradas
+    ), "el móvil se quedaría con el artículo sin leer para siempre"
+
+
+def test_quitar_la_estrella_a_lo_antiguo_llega_igual(escenario):
+    """El mismo caso por el otro lado: lo guardado entra en el ámbito solo
+    mientras tenga la estrella, así que quitarla es también una salida."""
+    hub, a, b, _, feed = escenario
+    antiguo = now_ms() - 400 * 86_400_000
+
+    viejo = Entry(
+        id="VIEJAEXGUARDADA", feed_id=feed.id, guid_hash=hash_guid(feed.id, "oldunstar"),
+        content_hash=hash_content("oldunstar"), title="Vieja, leída y guardada",
+        published_at=antiguo,
+    )
+    repo.insert_entry(hub.conn, viejo)
+    repo.set_read(hub.conn, [viejo.id], True)
+    repo.set_starred(hub.conn, [viejo.id], True)
+
+    scope = SyncScope(days=30, include_starred=True, include_unread=True)
+    assert is_entry_in_scope(hub.conn, viejo.id, scope)
+
+    repo.set_starred(hub.conn, [viejo.id], False)
+    ops, _, _ = repo.changes_since(hub.conn, 0, 10_000)
+    filtradas = filter_ops_for_scope(hub.conn, ops, scope)
+
+    assert any(
+        op.entity_id == viejo.id and op.field == "starred" and op.value is False
+        for op in filtradas
+    ), "el móvil seguiría enseñándolo en Guardados"
 
 
 def test_snapshot_arranca_un_cliente_nuevo(escenario):

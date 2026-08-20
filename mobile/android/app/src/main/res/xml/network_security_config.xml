@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  El hub vive dentro de la red de Tailscale y habla HTTP sin cifrar: el cifrado
+  y la autenticación los pone ya la propia VPN, y montar certificados para un
+  nombre .ts.net sería complicarlo sin ganar nada.
+
+  Por eso hay que permitir tráfico en claro de forma explícita: desde Android 9
+  está prohibido por omisión. Si algún día expones el hub a Internet con TLS,
+  cambia `cleartextTrafficPermitted` a false.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system"/>
+        </trust-anchors>
+    </base-config>
+</network-security-config>

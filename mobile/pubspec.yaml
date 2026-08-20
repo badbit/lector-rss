@@ -1,0 +1,34 @@
+name: rssmovil
+description: Cliente Android del lector RSS. Habla con el hub por JSON y funciona sin conexión.
+publish_to: none
+version: 0.1.0+1
+
+environment:
+  sdk: ">=3.5.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  # Espejo local. Se usa SQL a pelo, igual que en el núcleo Python: el esquema
+  # depende de índices parciales y del mismo modelo de sincronización, y un ORM
+  # con generación de código solo añadiría piezas móviles.
+  sqflite: ^2.3.3
+  path: ^1.9.0
+  path_provider: ^2.1.4
+  http: ^1.2.2
+  shared_preferences: ^2.3.2
+  intl: ^0.19.0
+  # Render del artículo sin motor web completo: ni JavaScript ni peticiones
+  # remotas, igual que el cliente de escritorio.
+  flutter_widget_from_html_core: ^0.15.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+  # Permite abrir la misma base SQLite en el escritorio, sin dispositivo: las
+  # pruebas del motor de sincronización no necesitan Android para nada.
+  sqflite_common_ffi: ^2.3.3
+
+flutter:
+  uses-material-design: true

@@ -43,7 +43,14 @@ def is_entry_in_scope(
     *,
     feed_ids: set[str] | None = None,
     now: int | None = None,
+    previo: tuple[str, bool] | None = None,
 ) -> bool:
+    """¿Replica el cliente esta entrada?
+
+    `previo` permite preguntarlo por el estado ANTERIOR a una operación, en la
+    forma `(campo, valor)`. Hace falta para las operaciones que sacan la entrada
+    del ámbito: ver `filter_ops_for_scope`.
+    """
     fila = conn.execute(
         "SELECT e.feed_id, e.published_at, s.read, s.starred FROM entries e "
         "LEFT JOIN entry_state s ON s.entry_id = e.id WHERE e.id = ?",
@@ -56,9 +63,18 @@ def is_entry_in_scope(
 
     if feed_ids is not None and fila["feed_id"] not in feed_ids:
         return False
-    if scope.include_starred and fila["starred"]:
+
+    leido, guardado = fila["read"], fila["starred"]
+    if previo is not None:
+        campo, valor = previo
+        if campo == "read":
+            leido = valor
+        elif campo == "starred":
+            guardado = valor
+
+    if scope.include_starred and guardado:
         return True
-    if scope.include_unread and not fila["read"]:
+    if scope.include_unread and not leido:
         return True
     if scope.days is None:
         return True
@@ -69,22 +85,51 @@ def is_entry_in_scope(
 def filter_ops_for_scope(
     conn: sqlite3.Connection, ops: Sequence[ChangeOp], scope: SyncScope
 ) -> list[ChangeOp]:
-    """Descarta las operaciones de artículos que el cliente no replica."""
+    """Descarta las operaciones de artículos que el cliente no replica.
+
+    El ámbito se mira sobre el estado que la entrada tiene AHORA, es decir ya con
+    la operación aplicada, y eso deja fuera justo a las operaciones que sacan la
+    entrada del ámbito: marcar como leído un artículo más viejo que la ventana lo
+    saca de `include_unread` y de la ventana a la vez, así que la operación que lo
+    marcó se descartaría y el cliente lo tendría sin leer para siempre. Por eso
+    una operación de estado se entrega si la entrada está en el ámbito con el
+    estado actual O con el anterior a esa misma operación.
+    """
     feed_ids = _scope_feed_ids(conn, scope)
     ahora = now_ms()
-    cache: dict[str, bool] = {}
+    # La clave lleva el valor además del campo: en un mismo lote pueden venir
+    # `starred=true` y `starred=false` de la misma entrada, y preguntan cosas
+    # distintas.
+    cache: dict[tuple[str, tuple[str, bool] | None], bool] = {}
     salida: list[ChangeOp] = []
+
+    def dentro(entry_id: str, previo: tuple[str, bool] | None) -> bool:
+        clave = (entry_id, previo)
+        valor = cache.get(clave)
+        if valor is None:
+            valor = is_entry_in_scope(
+                conn, entry_id, scope, feed_ids=feed_ids, now=ahora, previo=previo
+            )
+            cache[clave] = valor
+        return valor
 
     for op in ops:
         if op.entity in _SIEMPRE:
             salida.append(op)
             continue
+
         entry_id = op.entity_id.partition(":")[0]
-        dentro = cache.get(entry_id)
-        if dentro is None:
-            dentro = is_entry_in_scope(conn, entry_id, scope, feed_ids=feed_ids, now=ahora)
-            cache[entry_id] = dentro
-        if dentro:
+        if dentro(entry_id, None):
+            salida.append(op)
+            continue
+
+        # Los dos campos que ensanchan el ámbito son booleanos, así que el valor
+        # anterior es la negación del que trae la operación.
+        if (
+            op.entity is Entity.ENTRY_STATE
+            and op.field in ("read", "starred")
+            and dentro(entry_id, (op.field, not bool(op.value)))
+        ):
             salida.append(op)
     return salida
 

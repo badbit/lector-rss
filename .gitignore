@@ -12,7 +12,9 @@ build/
 *.db-wal
 *.db-shm
 .env
-data/
-out/
+# Anclados a la raíz: sin la barra inicial, `data/` se comía también
+# mobile/lib/data/, que es código fuente.
+/data/
+/out/
 .coverage
 htmlcov/

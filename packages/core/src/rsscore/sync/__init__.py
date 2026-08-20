@@ -9,7 +9,7 @@ que el resultado sea idéntico en todos los nodos sin necesidad de coordinación
 
 from .apply import ApplyResult, apply_ops, replay_pending
 from .compact import compact_change_log, min_client_seq
-from .scope import entries_in_scope, filter_ops_for_scope
+from .scope import entries_in_scope, filter_ops_for_scope, is_entry_in_scope
 from .snapshot import apply_snapshot, build_snapshot, iter_snapshot_chunks
 
 __all__ = [
@@ -20,6 +20,7 @@ __all__ = [
     "compact_change_log",
     "entries_in_scope",
     "filter_ops_for_scope",
+    "is_entry_in_scope",
     "iter_snapshot_chunks",
     "min_client_seq",
     "replay_pending",
