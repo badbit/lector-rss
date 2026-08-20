@@ -31,7 +31,7 @@ una cola de cambios que sube cuando puede.
 | CLI `rss` | funcionando |
 | Escritorio PySide6 (3 paneles, bandeja, atajos) | funcionando |
 | Exportadores (Obsidian, Kindle, revista EPUB) | funcionando |
-| Cliente Android (Flutter) | pendiente — contrato en `docs/android.md` |
+| Cliente Android (Flutter): lectura sin conexión, sincronización, ámbito parcial | funcionando — guía en `docs/android.md` |
 
 ## Instalación
 
@@ -147,3 +147,23 @@ aviso agrupado, no cuarenta.
 
 Incluyen convergencia entre dispositivos con conflictos reales, feeds rotos,
 fechas imposibles, GUID duplicados y el ciclo completo hub↔cliente por HTTP.
+
+## Licencia
+
+**AGPL-3.0-or-later** (texto completo en [`LICENSE`](LICENSE)).
+
+No es una elección estética: `ebooklib`, con el que se generan los EPUB, es
+AGPL-3.0-or-later, y `PySide6` se usa bajo LGPL-3.0-only. La única licencia que
+cubre el conjunto sin contradicciones es la AGPL, que además es la que encaja
+con lo que esto es: un servidor de sincronización que quien lo modifique y lo
+sirva a otros tendrá que publicar.
+
+El hub cumple el artículo 13 anunciando la URL de las fuentes en la descripción
+de la API y en `/health`. **Si modificas el hub y se lo sirves a alguien más,
+cambia `SOURCE_URL` en `packages/hub/src/rsshub/app.py` por la de tu versión.**
+
+Licencias de las dependencias directas, por si empaquetas para Debian: AGPL-3.0+
+(`ebooklib`), LGPL-3.0 (`PySide6`), Apache-2.0 (`trafilatura`, `python-dateutil`)
+y BSD/MIT el resto. Todas son DFSG-libres. Aviso de empaquetado: la AGPL-3 **no**
+está en `/usr/share/common-licenses`, así que `debian/copyright` tiene que llevar
+el texto entero en lugar de una referencia.

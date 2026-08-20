@@ -50,6 +50,15 @@ async def test_health(http):
     assert r.json()["ok"] is True
 
 
+async def test_health_ofrece_las_fuentes(http):
+    """El artículo 13 de la AGPL obliga a ofrecer el código a quien use el hub
+    por red. Sin interfaz web, /health es el único sitio donde todo cliente
+    mira, así que el aviso vive ahí y esta prueba impide que se borre sin más."""
+    cuerpo = (await http.get("/health")).json()
+    assert cuerpo["license"] == "AGPL-3.0-or-later"
+    assert cuerpo["source"].startswith("http")
+
+
 @respx.mock
 async def test_alta_de_feed_y_lectura(http, hub):
     _, cfg = hub

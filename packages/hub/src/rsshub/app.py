@@ -24,6 +24,13 @@ from .scheduler import build_scheduler
 
 log = logging.getLogger("rsshub")
 
+# El hub es un servicio en red bajo AGPL-3.0-or-later: el artículo 13 obliga a
+# ofrecer las fuentes a quien interactúe con él por red. Como aquí no hay
+# interfaz web donde poner un enlace, se anuncia en la descripción de la API y
+# en /health, que es lo que consulta cualquier cliente. Si modificas el hub y se
+# lo sirves a otros, cambia esta URL por la de TU versión.
+SOURCE_URL = "https://github.com/badbit/lector-rss"
+
 
 def create_app(cfg: Config | None = None, *, with_scheduler: bool = True) -> FastAPI:
     cfg = cfg or Config.load()
@@ -44,6 +51,10 @@ def create_app(cfg: Config | None = None, *, with_scheduler: bool = True) -> Fas
         title="rsshub",
         version="0.1.0",
         summary="Hub de sincronización del lector RSS (sin interfaz web)",
+        description=(
+            "Software libre bajo AGPL-3.0-or-later. "
+            f"Código fuente completo: {SOURCE_URL}"
+        ),
         lifespan=lifespan,
     )
 
@@ -65,6 +76,8 @@ def create_app(cfg: Config | None = None, *, with_scheduler: bool = True) -> Fas
             {
                 "ok": True,
                 "version": "0.1.0",
+                "license": "AGPL-3.0-or-later",
+                "source": SOURCE_URL,
                 "feeds": conn.execute(
                     "SELECT COUNT(*) AS n FROM feeds WHERE deleted = 0"
                 ).fetchone()["n"],
