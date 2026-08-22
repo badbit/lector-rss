@@ -102,6 +102,7 @@ class Tag(BaseModel):
 class Entity(StrEnum):
     FEED = "feed"
     FOLDER = "folder"
+    ENTRY = "entry"
     ENTRY_STATE = "entry_state"
     ENTRY_TAG = "entry_tag"
     TAG = "tag"

@@ -78,11 +78,13 @@ class IngestResult:
     error: str | None = None
     # entrada nueva → entrada ya existente en otro feed con el mismo contenido
     duplicate_of: dict[str, str] = field(default_factory=dict)
+    duplicates_removed: int = 0
+    existing_duplicates_removed: int = 0
     full_text: int = 0
 
     @property
     def changed(self) -> bool:
-        return bool(self.new_entries) or self.updated > 0
+        return bool(self.new_entries) or self.updated > 0 or self.existing_duplicates_removed > 0
 
 
 class Ingestor:
@@ -191,18 +193,53 @@ class Ingestor:
         *,
         watch_hash: str | None = None,
     ) -> None:
+        # 0) Una sola pasada sobre el archivo previo. Las entradas nuevas se
+        # deduplican abajo sin volver a recorrer todo el feed en cada refresco.
+        if feed.source_kind == "feed":
+            with _write_tx(self.conn):
+                removed = repo.deduplicate_feed_once(self.conn, feed.id)
+                result.duplicates_removed += removed
+                result.existing_duplicates_removed += removed
+
         # 1) Clasificar contra lo que ya hay (solo lecturas, fuera de transacción).
         to_insert: list[Entry] = []
         to_update: list[tuple[str, Entry]] = []
         for entry in parsed.entries:
             existing_id = repo.entry_exists(self.conn, feed.id, entry.guid_hash)
-            if existing_id is None:
-                to_insert.append(entry)
+            if existing_id is not None:
+                if self._content_changed(existing_id, entry):
+                    to_update.append((existing_id, entry))
+                else:
+                    result.skipped += 1
                 continue
-            if self._content_changed(existing_id, entry):
-                to_update.append((existing_id, entry))
-            else:
+
+            # Un editor puede regenerar el GUID sin cambiar la publicación. La
+            # URL canónica y la huella de contenido cubren ese caso.
+            duplicate = repo.duplicate_entry(self.conn, entry)
+            if duplicate:
+                twin_id, reason = duplicate
+                result.duplicate_of[entry.id] = twin_id
+                result.duplicates_removed += 1
+                if reason == "url" and self._content_changed(twin_id, entry):
+                    to_update.append((twin_id, entry))
+                else:
+                    result.skipped += 1
+                continue
+
+            pending_twin = next(
+                (
+                    candidate
+                    for candidate in to_insert
+                    if repo.entries_are_duplicates(candidate, entry)
+                ),
+                None,
+            )
+            if pending_twin:
+                result.duplicate_of[entry.id] = pending_twin.id
+                result.duplicates_removed += 1
                 result.skipped += 1
+                continue
+            to_insert.append(entry)
 
         # 2) Texto completo: es red, así que va antes de abrir la transacción.
         if to_insert:
@@ -217,13 +254,11 @@ class Ingestor:
         # 4) Escritura: un único lote, sin `await` dentro.
         with _write_tx(self.conn):
             for entry in to_insert:
-                repo.insert_entry(self.conn, entry)
+                repo.insert_entry(self.conn, entry, track=True)
                 result.new_entries.append(entry.id)
                 self._notify(entry, feed)
             for entry_id, entry in to_update:
-                repo.update_entry_body(
-                    self.conn, entry_id, html=entry.body_html, text=entry.body_text
-                )
+                repo.update_entry(self.conn, entry_id, entry, track=True)
                 result.updated += 1
             self._write_meta(
                 feed, parsed, fetched, changed=result.changed, at=started,

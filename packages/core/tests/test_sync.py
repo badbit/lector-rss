@@ -15,7 +15,7 @@ import pytest
 from rsscore import repo
 from rsscore.db import open_db
 from rsscore.ids import hash_content, hash_guid, now_ms
-from rsscore.models import Entry, Feed, SyncScope
+from rsscore.models import Entity, Entry, Feed, SyncScope
 from rsscore.sync import (
     apply_ops,
     apply_snapshot,
@@ -310,3 +310,41 @@ def test_snapshot_arranca_un_cliente_nuevo(escenario):
         ).fetchone()["last_pull_seq"] == foto["cursor"]
         # El índice de búsqueda se reconstruye: el snapshot no lo trae.
         assert repo.search(nuevo.conn, "prueba")
+
+
+def test_entrada_nueva_y_tombstone_viajan_por_el_diario(escenario):
+    hub, cliente, _, _, feed = escenario
+    nueva = Entry(
+        id="NUEVAPORDIARIO",
+        feed_id=feed.id,
+        guid_hash=hash_guid(feed.id, "nueva"),
+        content_hash=hash_content("Nueva", "cuerpo"),
+        url="https://example.test/nueva",
+        title="Nueva",
+        summary="cuerpo",
+    )
+    repo.insert_entry(hub.conn, nueva, track=True)
+    ops, _, _ = repo.changes_since(hub.conn, 0, 10_000)
+    data_op = next(
+        op for op in ops
+        if op.entity is Entity.ENTRY and op.entity_id == nueva.id and op.field == "data"
+    )
+
+    assert apply_ops(cliente.conn, [data_op]).applied == 1
+    assert repo.get_entry(cliente.conn, nueva.id, with_body=False)
+
+    repo.update_entry_body(cliente.conn, nueva.id, html="<p>viejo</p>", text="viejo")
+    edited = data_op.model_copy(
+        update={
+            "lamport": data_op.lamport + 1,
+            "value": {**data_op.value, "title": "Nueva, corregida"},
+        }
+    )
+    assert apply_ops(cliente.conn, [edited]).applied == 1
+    assert repo.get_body(cliente.conn, nueva.id) == (None, None)
+
+    repo.delete_entry(hub.conn, nueva.id)
+    ops, _, _ = repo.changes_since(hub.conn, data_op.seq or 0, 10_000)
+    deleted_op = next(op for op in ops if op.entity_id == nueva.id and op.field == "deleted")
+    assert apply_ops(cliente.conn, [deleted_op]).applied == 1
+    assert repo.get_entry(cliente.conn, nueva.id, with_body=False) is None

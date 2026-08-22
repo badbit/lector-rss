@@ -108,6 +108,20 @@ Tres detalles que importan con un archivo permanente:
 - **Compactación**: el diario se colapsa cada noche dejando la última operación
   de cada campo, nunca por encima del cursor del cliente más rezagado.
 
+## Publicaciones duplicadas
+
+Durante cada ingesta se conserva una sola publicación cuando, dentro del mismo
+feed RSS y dentro de una ventana de siete días, coincide la URL canónica
+(ignorando fragmentos y parámetros de rastreo) o coincide exactamente el
+contenido. El primer refresco también limpia duplicados que ya estuvieran
+archivados.
+
+Antes de borrar una copia se fusionan sus estados: prevalecen «sin leer» y
+«guardado», se unen las etiquetas y se conserva el cuerpo más completo. La baja
+viaja en el diario para que Android elimine también su copia local. Artículos
+iguales procedentes de feeds diferentes se conservan, porque pueden representar
+coberturas distintas de una misma noticia.
+
 ## Reglas
 
 `~/.config/rss/rules.yaml`, cargado con `rss rules import`:

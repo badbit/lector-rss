@@ -216,7 +216,12 @@ async def refresh_feed(feed_id: str) -> dict:
         raise HTTPException(404, "Feed no encontrado")
     result = await Ingestor(conn, config()).refresh_feed(feed)
     bus.publish({"type": "entries_changed", "feed_id": feed_id})
-    return {"feed_id": feed_id, "nuevas": len(result.new_entries), "estado": result.status}
+    return {
+        "feed_id": feed_id,
+        "nuevas": len(result.new_entries),
+        "duplicadas_eliminadas": result.duplicates_removed,
+        "estado": result.status,
+    }
 
 
 @router.post("/refresh")
@@ -225,8 +230,9 @@ async def refresh_all() -> dict:
 
     results = await Ingestor(db(), config()).refresh_due()
     total = sum(len(r.new_entries) for r in results)
+    duplicadas = sum(r.duplicates_removed for r in results)
     bus.publish({"type": "entries_changed"})
-    return {"feeds": len(results), "nuevas": total}
+    return {"feeds": len(results), "nuevas": total, "duplicadas_eliminadas": duplicadas}
 
 
 @router.post("/{feed_id}/read")

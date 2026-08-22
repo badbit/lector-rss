@@ -30,9 +30,15 @@ async def refresh_tick(cfg: Config) -> None:
         log.exception("Fallo en el ciclo de refresco")
         return
     nuevas = sum(len(r.new_entries) for r in results)
-    if nuevas:
-        log.info("Refresco: %d feeds, %d entradas nuevas", len(results), nuevas)
-        bus.publish({"type": "entries_changed", "nuevas": nuevas})
+    duplicadas = sum(r.existing_duplicates_removed for r in results)
+    if nuevas or duplicadas:
+        log.info(
+            "Refresco: %d feeds, %d entradas nuevas, %d duplicadas eliminadas",
+            len(results), nuevas, duplicadas,
+        )
+        bus.publish(
+            {"type": "entries_changed", "nuevas": nuevas, "duplicadas_eliminadas": duplicadas}
+        )
 
 
 def _build_rules_hook(conn, cfg: Config):

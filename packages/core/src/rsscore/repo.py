@@ -13,7 +13,7 @@ from collections.abc import Iterable, Iterator
 from typing import Any
 
 from .db import compress, decompress, device_id, tick_lamport
-from .ids import new_id, now_ms
+from .ids import canonical_url, new_id, now_ms
 from .models import (
     ChangeOp,
     Entity,
@@ -353,6 +353,8 @@ def _feed(row: sqlite3.Row) -> Feed:
 
 # ======================================================================= entradas
 
+DUPLICATE_WINDOW_MS = 7 * 86_400_000
+
 
 def entry_exists(conn: sqlite3.Connection, feed_id: str, guid_hash: str) -> str | None:
     row = conn.execute(
@@ -369,7 +371,58 @@ def content_hash_exists(conn: sqlite3.Connection, content_hash: str) -> str | No
     return row["id"] if row else None
 
 
-def insert_entry(conn: sqlite3.Connection, entry: Entry) -> str:
+def duplicate_entry(
+    conn: sqlite3.Connection, entry: Entry, *, exclude_id: str | None = None
+) -> tuple[str, str] | None:
+    """Busca la misma publicación dentro de su feed.
+
+    La URL canónica es una identidad fuerte. La huella de contenido solo cuenta
+    dentro de siete días para no borrar secciones recurrentes que legítimamente
+    reutilizan el mismo texto meses después.
+    """
+    rows = conn.execute(
+        "SELECT id, url, content_hash, title, summary, has_body, published_at "
+        "FROM entries WHERE feed_id = ? AND id != COALESCE(?, '')",
+        (entry.feed_id, exclude_id),
+    ).fetchall()
+    wanted_url = canonical_url(entry.url)
+    has_signal = bool(entry.title.strip() or (entry.summary or "").strip() or entry.body_text)
+    for row in rows:
+        close_in_time = abs(row["published_at"] - entry.published_at) <= DUPLICATE_WINDOW_MS
+        if wanted_url and canonical_url(row["url"]) == wanted_url and close_in_time:
+            return row["id"], "url"
+        row_has_signal = bool(
+            (row["title"] or "").strip() or (row["summary"] or "").strip() or row["has_body"]
+        )
+        if (
+            has_signal
+            and row_has_signal
+            and row["content_hash"] == entry.content_hash
+            and close_in_time
+        ):
+            return row["id"], "content"
+    return None
+
+
+def entries_are_duplicates(first: Entry, second: Entry) -> str | None:
+    """Versión en memoria de :func:`duplicate_entry`, para un mismo lote."""
+    first_url, second_url = canonical_url(first.url), canonical_url(second.url)
+    close_in_time = abs(first.published_at - second.published_at) <= DUPLICATE_WINDOW_MS
+    if first_url and first_url == second_url and close_in_time:
+        return "url"
+    first_signal = bool(first.title.strip() or (first.summary or "").strip() or first.body_text)
+    second_signal = bool(second.title.strip() or (second.summary or "").strip() or second.body_text)
+    if (
+        first_signal
+        and second_signal
+        and first.content_hash == second.content_hash
+        and close_in_time
+    ):
+        return "content"
+    return None
+
+
+def insert_entry(conn: sqlite3.Connection, entry: Entry, *, track: bool = False) -> str:
     """Inserta la entrada, su cuerpo comprimido y su índice de búsqueda."""
     cur = conn.execute(
         "INSERT INTO entries (id, feed_id, guid_hash, content_hash, url, title, author, summary, "
@@ -408,7 +461,155 @@ def insert_entry(conn: sqlite3.Connection, entry: Entry) -> str:
         "INSERT INTO entries_fts (rowid, title, author, body) VALUES (?,?,?,?)",
         (rowid, entry.title, entry.author or "", entry.body_text or entry.summary or ""),
     )
+    if track:
+        append_change(
+            conn, Entity.ENTRY, entry.id, "data", entry_sync_data(entry), to_outbox=False
+        )
     return entry.id
+
+
+def entry_sync_data(entry: Entry, *, entry_id: str | None = None) -> dict[str, Any]:
+    """Metadatos que viajan a los clientes; el cuerpo se pide bajo demanda."""
+    return {
+        "id": entry_id or entry.id,
+        "feed_id": entry.feed_id,
+        "guid_hash": entry.guid_hash,
+        "content_hash": entry.content_hash,
+        "url": entry.url,
+        "title": entry.title,
+        "author": entry.author,
+        "summary": entry.summary,
+        "published_at": entry.published_at,
+        "updated_at": entry.updated_at,
+        "fetched_at": entry.fetched_at,
+        # El cuerpo no viaja en el diario: el cliente siempre lo pide al abrir.
+        "has_body": False,
+        "full_text_at": entry.full_text_at,
+        "enclosure_url": entry.enclosure_url,
+        "enclosure_type": entry.enclosure_type,
+    }
+
+
+def update_entry(
+    conn: sqlite3.Connection, entry_id: str, entry: Entry, *, track: bool = False
+) -> None:
+    """Actualiza una publicación sin cambiar su identidad local."""
+    conn.execute(
+        "UPDATE entries SET content_hash=?, url=?, title=?, author=?, summary=?, "
+        "published_at=?, updated_at=?, fetched_at=?, enclosure_url=?, enclosure_type=? "
+        "WHERE id=?",
+        (
+            entry.content_hash,
+            entry.url,
+            entry.title,
+            entry.author,
+            entry.summary,
+            entry.published_at,
+            entry.updated_at,
+            entry.fetched_at,
+            entry.enclosure_url,
+            entry.enclosure_type,
+            entry_id,
+        ),
+    )
+    if entry.body_html or entry.body_text:
+        update_entry_body(conn, entry_id, html=entry.body_html, text=entry.body_text)
+    else:
+        _reindex_entry(conn, entry_id, entry.summary or "")
+    if track:
+        append_change(
+            conn,
+            Entity.ENTRY,
+            entry_id,
+            "data",
+            entry_sync_data(entry, entry_id=entry_id),
+            to_outbox=False,
+        )
+
+
+def delete_entry(conn: sqlite3.Connection, entry_id: str, *, track: bool = True) -> bool:
+    """Elimina una entrada y sus datos derivados, dejando un tombstone sincronizable."""
+    row = conn.execute("SELECT rowid FROM entries WHERE id = ?", (entry_id,)).fetchone()
+    if row:
+        conn.execute("DELETE FROM entries_fts WHERE rowid = ?", (row["rowid"],))
+        conn.execute("DELETE FROM entries WHERE id = ?", (entry_id,))
+    conn.execute(
+        "DELETE FROM field_clock WHERE (entity = 'entry_state' AND entity_id = ?) "
+        "OR (entity = 'entry_tag' AND entity_id LIKE ?)",
+        (entry_id, f"{entry_id}:%"),
+    )
+    conn.execute(
+        "DELETE FROM sync_pending WHERE entity_id = ? OR entity_id LIKE ?",
+        (entry_id, f"{entry_id}:%"),
+    )
+    conn.execute(
+        "DELETE FROM outbox WHERE entity_id = ? OR entity_id LIKE ?",
+        (entry_id, f"{entry_id}:%"),
+    )
+    if track and row:
+        append_change(conn, Entity.ENTRY, entry_id, "deleted", True, to_outbox=False)
+    return bool(row)
+
+
+def deduplicate_feed(conn: sqlite3.Connection, feed_id: str) -> int:
+    """Limpia duplicados históricos de un RSS y fusiona su estado en el superviviente."""
+    rows = conn.execute(
+        "SELECT e.*, COALESCE(b.bytes_raw, 0) AS body_bytes FROM entries e "
+        "LEFT JOIN entry_bodies b ON b.entry_id = e.id WHERE e.feed_id = ? "
+        "ORDER BY e.fetched_at, e.id",
+        (feed_id,),
+    ).fetchall()
+    survivors: list[Entry] = []
+    removed = 0
+    for row in rows:
+        current = _entry(row)
+        match = next((item for item in survivors if entries_are_duplicates(item, current)), None)
+        if match is None:
+            survivors.append(current)
+            continue
+        _merge_entry(conn, match.id, current.id)
+        delete_entry(conn, current.id)
+        removed += 1
+    return removed
+
+
+def deduplicate_feed_once(conn: sqlite3.Connection, feed_id: str) -> int:
+    """Ejecuta la limpieza histórica una vez por feed y versión del algoritmo."""
+    key = f"dedupe_v1:{feed_id}"
+    row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    if row and row["value"] == "1":
+        return 0
+    removed = deduplicate_feed(conn, feed_id)
+    conn.execute(
+        "INSERT INTO settings (key, value) VALUES (?, '1') "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (key,),
+    )
+    return removed
+
+
+def _merge_entry(conn: sqlite3.Connection, survivor_id: str, duplicate_id: str) -> None:
+    """Conserva lo valioso de ambas copias antes de borrar una."""
+    survivor_state = get_state(conn, survivor_id)
+    duplicate_state = get_state(conn, duplicate_id)
+    if survivor_state and duplicate_state:
+        if survivor_state.read and not duplicate_state.read:
+            set_read(conn, [survivor_id], False)
+        if duplicate_state.starred and not survivor_state.starred:
+            set_starred(conn, [survivor_id], True)
+
+    for tag in entry_tags(conn, duplicate_id):
+        if not any(existing.id == tag.id for existing in entry_tags(conn, survivor_id)):
+            tag_entry(conn, survivor_id, tag.id)
+
+    sizes = conn.execute(
+        "SELECT entry_id, bytes_raw FROM entry_bodies WHERE entry_id IN (?, ?)",
+        (survivor_id, duplicate_id),
+    ).fetchall()
+    size_by_id = {row["entry_id"]: row["bytes_raw"] for row in sizes}
+    if size_by_id.get(duplicate_id, 0) > size_by_id.get(survivor_id, 0):
+        html, text = get_body(conn, duplicate_id)
+        update_entry_body(conn, survivor_id, html=html, text=text)
 
 
 def update_entry_body(
@@ -425,6 +626,11 @@ def update_entry_body(
     conn.execute(
         "UPDATE entries SET has_body = 1, full_text_at = ? WHERE id = ?", (now_ms(), entry_id)
     )
+    _reindex_entry(conn, entry_id, text or "")
+
+
+def _reindex_entry(conn: sqlite3.Connection, entry_id: str, body: str) -> None:
+    """Reconstruye una fila del FTS contentless tras cambiar sus metadatos."""
     row = conn.execute(
         "SELECT rowid, title, author FROM entries WHERE id = ?", (entry_id,)
     ).fetchone()
@@ -432,7 +638,7 @@ def update_entry_body(
         conn.execute("DELETE FROM entries_fts WHERE rowid = ?", (row["rowid"],))
         conn.execute(
             "INSERT INTO entries_fts (rowid, title, author, body) VALUES (?,?,?,?)",
-            (row["rowid"], row["title"], row["author"] or "", text or ""),
+            (row["rowid"], row["title"], row["author"] or "", body),
         )
 
 

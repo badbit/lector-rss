@@ -171,6 +171,44 @@ void main() {
     });
   });
 
+  group('altas y bajas de artículos', () {
+    test('una entrada nueva llega por el diario después del snapshot', () async {
+      final (app, _, sync) = await _abrir();
+      await app.db.insert('feeds', {
+        'id': 'F1',
+        'url': 'https://ejemplo/feed',
+        'title': 'Feed',
+      });
+
+      final r = await sync.applyOps([
+        _op('entry', 'NUEVA', 'data', {
+          'id': 'NUEVA',
+          'feed_id': 'F1',
+          'url': 'https://ejemplo/nueva',
+          'title': 'Recién publicada',
+          'published_at': 2000,
+        }, lamport: 5, device: 'HUB'),
+      ]);
+
+      expect(r.applied, 1);
+      expect(await _estado(app, 'NUEVA'), isNotNull);
+      expect((await app.db.query('entries', where: 'id = ?', whereArgs: ['NUEVA'])).length, 1);
+    });
+
+    test('el tombstone elimina la copia local y su estado', () async {
+      final (app, _, sync) = await _abrir();
+      await _sembrar(app);
+
+      final r = await sync.applyOps([
+        _op('entry', 'E1', 'deleted', true, lamport: 8, device: 'HUB'),
+      ]);
+
+      expect(r.applied, 1);
+      expect(await _estado(app, 'E1'), isNull);
+      expect(await app.db.query('entries', where: 'id = ?', whereArgs: ['E1']), isEmpty);
+    });
+  });
+
   group('lista blanca de campos', () {
     test('un campo desconocido se descarta en vez de llegar al SQL', () async {
       final (app, _, sync) = await _abrir();

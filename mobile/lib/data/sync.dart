@@ -19,6 +19,7 @@ import 'repo.dart';
 /// Columnas que cada entidad admite. Es una lista blanca: el nombre del campo
 /// viene de la red y acaba interpolado en el SQL.
 const _camposPorEntidad = <String, Set<String>>{
+  'entry': {'data', 'deleted'},
   'entry_state': {'read', 'starred'},
   'entry_tag': {'deleted'},
   'tag': {'name', 'color', 'deleted'},
@@ -221,9 +222,51 @@ class SyncEngine {
     final valor = _booleanos.contains(op.field) ? _entero(op.value) : op.value;
 
     switch (op.entity) {
+      case 'entry':
+        if (op.field == 'deleted') {
+          if (_entero(op.value) != 1) return 'ignored';
+          await _eliminarEntrada(op.entityId);
+          break;
+        }
+        final borrado = await _reloj('entry', op.entityId, 'deleted');
+        if (borrado != null && !op.winsOver(borrado.$1, borrado.$2)) {
+          return 'ignored';
+        }
+        if (op.value is! Map) return 'ignored';
+        final datos = Map<String, dynamic>.from(op.value as Map);
+        final feedId = datos['feed_id'];
+        if (feedId is! String || !await _existe('feeds', 'id', feedId)) {
+          return 'pending';
+        }
+        // Si es una edición, el cuerpo cacheado ya no corresponde a estos
+        // metadatos. Se volverá a pedir al hub cuando se abra el artículo.
+        await db.delete('entry_bodies', where: 'entry_id = ?', whereArgs: [op.entityId]);
+        await db.rawInsert('''
+          INSERT INTO entries (id, feed_id, url, title, author, summary, published_at, has_body)
+          VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+          ON CONFLICT(id) DO UPDATE SET feed_id = excluded.feed_id,
+            url = excluded.url, title = excluded.title, author = excluded.author,
+            summary = excluded.summary, published_at = excluded.published_at, has_body = 0
+        ''', [
+          op.entityId,
+          feedId,
+          datos['url'],
+          datos['title'] ?? '',
+          datos['author'],
+          datos['summary'],
+          datos['published_at'] ?? 0,
+        ]);
+        await db.rawInsert('''
+          INSERT INTO entry_state (entry_id, read, starred) VALUES (?, 0, 0)
+          ON CONFLICT(entry_id) DO NOTHING
+        ''', [op.entityId]);
+
       case 'entry_state':
         // Puede llegar el estado de un artículo que este móvil aún no tiene.
-        if (!await _existe('entries', 'id', op.entityId)) return 'pending';
+        if (!await _existe('entries', 'id', op.entityId)) {
+          if (await _reloj('entry', op.entityId, 'deleted') != null) return 'ignored';
+          return 'pending';
+        }
         final columnaFecha = op.field == 'read' ? 'read_at' : 'star_at';
         await db.rawInsert('''
           INSERT INTO entry_state (entry_id, ${op.field}, $columnaFecha)
@@ -235,7 +278,10 @@ class SyncEngine {
       case 'entry_tag':
         final partes = op.entityId.split(':');
         if (partes.length != 2) return 'ignored';
-        if (!await _existe('entries', 'id', partes[0])) return 'pending';
+        if (!await _existe('entries', 'id', partes[0])) {
+          if (await _reloj('entry', partes[0], 'deleted') != null) return 'ignored';
+          return 'pending';
+        }
         if (!await _existe('tags', 'id', partes[1])) return 'pending';
         await db.rawInsert('''
           INSERT INTO entry_tags (entry_id, tag_id, deleted) VALUES (?, ?, ?)
@@ -255,6 +301,23 @@ class SyncEngine {
 
     await _guardarReloj(op);
     return 'applied';
+  }
+
+  Future<void> _eliminarEntrada(String id) async {
+    final lote = db.batch();
+    lote.delete('entry_tags', where: 'entry_id = ?', whereArgs: [id]);
+    lote.delete('entry_state', where: 'entry_id = ?', whereArgs: [id]);
+    lote.delete('entry_bodies', where: 'entry_id = ?', whereArgs: [id]);
+    lote.delete('entries', where: 'id = ?', whereArgs: [id]);
+    lote.delete('sync_pending',
+        where: 'entity_id = ? OR entity_id LIKE ?', whereArgs: [id, '$id:%']);
+    lote.delete('outbox',
+        where: 'entity_id = ? OR entity_id LIKE ?', whereArgs: [id, '$id:%']);
+    lote.delete('field_clock',
+        where: "(entity = 'entry_state' AND entity_id = ?) "
+            "OR (entity = 'entry_tag' AND entity_id LIKE ?)",
+        whereArgs: [id, '$id:%']);
+    await lote.commit(noResult: true);
   }
 
   /// Las operaciones de una entidad llegan como campos sueltos y en cualquier
