@@ -6,6 +6,7 @@
 library;
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'api/hub_client.dart';
@@ -15,22 +16,34 @@ import 'data/sync.dart';
 import 'models.dart';
 
 class AppState extends ChangeNotifier {
-  AppState._(this._prefs, this.app, this.repo);
+  AppState._(this._prefs, this._secure, this._hubToken, this.app, this.repo);
 
   final SharedPreferences _prefs;
+  final FlutterSecureStorage _secure;
+  String _hubToken;
   final AppDatabase app;
   final Repo repo;
 
   static Future<AppState> crear() async {
     final prefs = await SharedPreferences.getInstance();
+    const secure = FlutterSecureStorage();
+    var token = await secure.read(key: 'hub_token') ?? '';
+    // Migración desde las versiones que guardaban el token en preferencias.
+    if (token.isEmpty) {
+      token = prefs.getString('hub_token') ?? '';
+      if (token.isNotEmpty) await secure.write(key: 'hub_token', value: token);
+      await prefs.remove('hub_token');
+    }
     final db = await AppDatabase.open();
-    return AppState._(prefs, db, Repo(db));
+    return AppState._(prefs, secure, token, db, Repo(db));
   }
 
   // ------------------------------------------------------------ ajustes
   String get hubUrl => _prefs.getString('hub_url') ?? '';
-  String get hubToken => _prefs.getString('hub_token') ?? '';
+  String get hubToken => _hubToken;
   int get ventanaDias => _prefs.getInt('scope_days') ?? 30;
+  bool get sincronizacionEnSegundoPlano =>
+      _prefs.getBool('background_sync') ?? true;
 
   bool get configurado => hubUrl.isNotEmpty;
 
@@ -38,10 +51,17 @@ class AppState extends ChangeNotifier {
     required String url,
     required String token,
     int? dias,
+    bool? segundoPlano,
   }) async {
     await _prefs.setString('hub_url', url.trim());
-    await _prefs.setString('hub_token', token.trim());
-    if (dias != null) await _prefs.setInt('scope_days', dias);
+    _hubToken = token.trim();
+    await _secure.write(key: 'hub_token', value: _hubToken);
+    if (dias != null) {
+      await _prefs.setInt('scope_days', dias);
+    }
+    if (segundoPlano != null) {
+      await _prefs.setBool('background_sync', segundoPlano);
+    }
     notifyListeners();
   }
 
@@ -142,6 +162,34 @@ class AppState extends ChangeNotifier {
   }
 
   Future<int> pendientesDeSubir() => repo.cambiosPendientes();
+
+  Future<void> suscribirse(String url) async {
+    final cliente = _cliente();
+    try {
+      await cliente.agregarFeed(url);
+      await sincronizar();
+    } finally {
+      cliente.close();
+    }
+  }
+
+  Future<void> exportarObsidian(String entryId) async {
+    final cliente = _cliente();
+    try {
+      await cliente.exportarObsidian([entryId]);
+    } finally {
+      cliente.close();
+    }
+  }
+
+  Future<void> enviarKindle(String entryId) async {
+    final cliente = _cliente();
+    try {
+      await cliente.enviarKindle([entryId]);
+    } finally {
+      cliente.close();
+    }
+  }
 
   Future<void> olvidarTodo() async {
     await app.vaciar();

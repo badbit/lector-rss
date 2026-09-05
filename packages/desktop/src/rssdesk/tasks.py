@@ -12,6 +12,7 @@ import logging
 import sqlite3
 from collections.abc import Callable
 
+import httpx
 from rsscore import repo
 from rsscore.config import Config
 from rsscore.models import ExportKind
@@ -39,6 +40,9 @@ class Backend:
         self._refrescando = True
         avisos: list[Notification] = []
         try:
+            if not self.cfg.desktop_fetches_locally:
+                return await self._refrescar_en_hub(todos=todos, feed_id=feed_id)
+
             from rsscore.ingest import Ingestor
 
             hook = self._hook_reglas(avisos)
@@ -60,6 +64,24 @@ class Backend:
             await self._enviar_avisos(avisos)
         return (len(resultados), sum(len(r.new_entries) for r in resultados))
 
+    async def _refrescar_en_hub(
+        self, *, todos: bool = False, feed_id: str | None = None
+    ) -> tuple[int, int]:
+        """Ordena el refresco al hub y baja inmediatamente su resultado."""
+        if not self.cfg.hub_url:
+            return (0, 0)
+        ruta = f"/feeds/{feed_id}/refresh" if feed_id else "/feeds/refresh"
+        token = self.cfg.hub_token.get_secret_value()
+        headers = {"Authorization": f"Bearer {token}"} if token else {}
+        async with httpx.AsyncClient(
+            base_url=self.cfg.hub_url.rstrip("/"), headers=headers, timeout=60
+        ) as client:
+            response = await client.post(ruta, params={"force": todos} if not feed_id else None)
+            response.raise_for_status()
+            data = response.json()
+        await self.sincronizar()
+        return (int(data.get("feeds", 1)), int(data.get("nuevas", 0)))
+
     def _hook_reglas(self, avisos: list[Notification]) -> Callable | None:
         try:
             from rsscore.rules import RuleEngine, load_rules, make_ingest_hook
@@ -69,6 +91,26 @@ class Backend:
         if not reglas:
             return None
         return make_ingest_hook(RuleEngine(reglas), collector=avisos)
+
+    async def suscribirse(self, url: str, folder_id: str | None = None) -> str:
+        """Da de alta en el hub cuando existe; en modo autónomo usa el núcleo."""
+        if self.cfg.desktop_fetches_locally:
+            from rsscore.ingest import Ingestor
+
+            async with Ingestor(self.conn, self.cfg) as ingestor:
+                feed = await ingestor.add_by_url(url, folder_id=folder_id)
+            return feed.display_title
+
+        token = self.cfg.hub_token.get_secret_value()
+        headers = {"Authorization": f"Bearer {token}"} if token else {}
+        async with httpx.AsyncClient(
+            base_url=self.cfg.hub_url.rstrip("/"), headers=headers, timeout=60
+        ) as client:
+            response = await client.post("/feeds", json={"url": url, "folder_id": folder_id})
+            response.raise_for_status()
+            data = response.json()
+        await self.sincronizar()
+        return str(data.get("title") or url)
 
     async def _enviar_avisos(self, avisos: list[Notification]) -> None:
         """Agrupadas: cuarenta artículos de una regla son UN aviso, no cuarenta."""
@@ -163,6 +205,10 @@ class Backend:
                 return
             except TimeoutError:
                 pass
+            # Con hub, su planificador es el único que visita las fuentes. El
+            # bucle de sincronización de este cliente traerá las novedades.
+            if not self.cfg.desktop_fetches_locally:
+                continue
             feeds, nuevas = await self.refrescar()
             if nuevas and callback:
                 callback(feeds, nuevas)

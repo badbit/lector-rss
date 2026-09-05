@@ -126,7 +126,8 @@ class HubClient {
   Future<Entry> entrada(String id) async =>
       Entry.fromJson((await _get('/entries/$id')) as Map<String, dynamic>);
 
-  Future<List<Entry>> entradas({int limit = 100, bool soloSinLeer = false}) async {
+  Future<List<Entry>> entradas(
+      {int limit = 100, bool soloSinLeer = false}) async {
     final json = (await _get('/entries', {
       'limit': limit,
       if (soloSinLeer) 'unread': true,
@@ -135,6 +136,21 @@ class HubClient {
   }
 
   Future<void> refrescar() async => _post('/feeds/refresh', const {});
+
+  Future<void> agregarFeed(String url, {String? folderId}) async {
+    await _post('/feeds', {
+      'url': url,
+      if (folderId != null) 'folder_id': folderId,
+    });
+  }
+
+  Future<void> exportarObsidian(List<String> ids) async {
+    await _post('/export/obsidian', {'entry_ids': ids, 'target': 'desktop'});
+  }
+
+  Future<void> enviarKindle(List<String> ids) async {
+    await _post('/export/kindle', {'entry_ids': ids});
+  }
 
   void close() => _cliente.close();
 }

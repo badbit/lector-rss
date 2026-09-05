@@ -34,12 +34,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 from rsscore import repo
-from rsscore.config import Config
+from rsscore.config import Config, default_config_path
 from rsscore.db import open_db
 from rsscore.models import EntrySelection
 
 from .article import ArticleView
 from .models import ROL_ID, ROL_TIPO, EntryListModel, FeedTreeModel
+from .settings import edit_settings
 from .tasks import Backend
 from .tray import Tray
 
@@ -47,10 +48,11 @@ log = logging.getLogger("rssdesk")
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, conn, cfg: Config) -> None:
+    def __init__(self, conn, cfg: Config, config_path: Path | None = None) -> None:
         super().__init__()
         self.conn = conn
         self.cfg = cfg
+        self.config_path = config_path or default_config_path()
         self.backend = Backend(conn, cfg)
         self.stop = asyncio.Event()
         self._tareas: set[asyncio.Task] = set()
@@ -118,6 +120,7 @@ class MainWindow(QMainWindow):
         barra.setMovable(False)
         self.addToolBar(barra)
         menu_archivo = self.menuBar().addMenu("&Archivo")
+        menu_suscripciones = self.menuBar().addMenu("&Suscripciones")
         menu_ver = self.menuBar().addMenu("&Ver")
         menu_exportar = self.menuBar().addMenu("&Exportar")
 
@@ -151,6 +154,7 @@ class MainWindow(QMainWindow):
         menu_archivo.addSeparator()
         accion("Importar OPML…", None, self._importar_opml, menu=menu_archivo)
         accion("Exportar OPML…", None, self._exportar_opml, menu=menu_archivo)
+        accion("&Preferencias…", "Ctrl+,", self._preferencias, menu=menu_archivo)
         menu_archivo.addSeparator()
         accion("&Salir", "Ctrl+Q", self._salir, menu=menu_archivo)
 
@@ -163,6 +167,11 @@ class MainWindow(QMainWindow):
         accion("Marcar todo como leído", "Ctrl+A", self._marcar_todo_leido, menu=menu_ver)
         accion("Abrir en el navegador", "Ctrl+O", self._abrir_en_navegador, menu=menu_ver)
         accion("Buscar", "Ctrl+F", lambda: self.buscador.setFocus(), menu=menu_ver)
+
+        accion("Nueva &carpeta…", None, self._nueva_carpeta, menu=menu_suscripciones)
+        accion("&Renombrar…", None, self._renombrar_seleccion, menu=menu_suscripciones)
+        accion("&Mover feed…", None, self._mover_feed, menu=menu_suscripciones)
+        accion("&Eliminar…", "Delete", self._eliminar_seleccion, menu=menu_suscripciones)
 
         accion(
             "A &Obsidian",
@@ -324,6 +333,98 @@ class MainWindow(QMainWindow):
         if ok and url.strip():
             self._lanzar(self._alta(url.strip()))
 
+    def _preferencias(self) -> None:
+        if not edit_settings(self, self.cfg, self.config_path):
+            return
+        self.statusBar().showMessage(f"Preferencias guardadas en {self.config_path}", 6000)
+        self._lanzar(self._sincronizar())
+
+    def _nodo_seleccionado(self) -> tuple[str | None, str | None]:
+        index = self.arbol.currentIndex()
+        if not index.isValid():
+            return None, None
+        return self.modelo_arbol.data(index, ROL_TIPO), self.modelo_arbol.data(index, ROL_ID)
+
+    def _nueva_carpeta(self) -> None:
+        from rsscore.models import Folder
+
+        nombre, ok = QInputDialog.getText(self, "Nueva carpeta", "Nombre:")
+        if not ok or not nombre.strip():
+            return
+        repo.upsert_folder(self.conn, Folder(name=nombre.strip()))
+        self._recargar_arbol()
+        self._lanzar(self._sincronizar())
+
+    def _renombrar_seleccion(self) -> None:
+        tipo, ident = self._nodo_seleccionado()
+        if tipo == "feed" and ident:
+            feed = repo.get_feed(self.conn, ident)
+            if not feed:
+                return
+            nombre, ok = QInputDialog.getText(
+                self, "Renombrar suscripción", "Título:", text=feed.display_title
+            )
+            if ok:
+                repo.set_feed_title(self.conn, ident, nombre)
+        elif tipo == "carpeta" and ident:
+            folder = repo.get_folder(self.conn, ident)
+            if not folder:
+                return
+            nombre, ok = QInputDialog.getText(
+                self, "Renombrar carpeta", "Nombre:", text=folder.name
+            )
+            if ok and nombre.strip():
+                repo.rename_folder(self.conn, ident, nombre)
+        else:
+            self.statusBar().showMessage("Selecciona una carpeta o una suscripción", 4000)
+            return
+        self._recargar_arbol()
+        self._lanzar(self._sincronizar())
+
+    def _mover_feed(self) -> None:
+        tipo, ident = self._nodo_seleccionado()
+        if tipo != "feed" or not ident:
+            self.statusBar().showMessage("Selecciona una suscripción", 4000)
+            return
+        folders = repo.list_folders(self.conn)
+        labels = ["Sin carpeta", *(f.name for f in folders)]
+        elegido, ok = QInputDialog.getItem(
+            self, "Mover suscripción", "Carpeta:", labels, editable=False
+        )
+        if not ok:
+            return
+        folder_id = None if elegido == "Sin carpeta" else folders[labels.index(elegido) - 1].id
+        repo.set_feed_folder(self.conn, ident, folder_id)
+        self._recargar_arbol()
+        self._lanzar(self._sincronizar())
+
+    def _eliminar_seleccion(self) -> None:
+        tipo, ident = self._nodo_seleccionado()
+        if tipo not in {"feed", "carpeta"} or not ident:
+            self.statusBar().showMessage("Selecciona una carpeta o una suscripción", 4000)
+            return
+        nombre = self.modelo_arbol.data(self.arbol.currentIndex())
+        respuesta = QMessageBox.question(
+            self,
+            "Eliminar",
+            f"¿Eliminar «{nombre}»? Los artículos archivados no se borrarán manualmente.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if respuesta != QMessageBox.StandardButton.Yes:
+            return
+        if tipo == "feed":
+            repo.delete_feed(self.conn, ident)
+        else:
+            repo.delete_folder(self.conn, ident)
+        self._recargar_arbol()
+        self._lanzar(self._sincronizar())
+
+    def _recargar_arbol(self) -> None:
+        self.modelo_arbol.recargar()
+        self.arbol.expandAll()
+        self.modelo_lista.recargar()
+        self._actualizar_contadores()
+
     def _importar_opml(self) -> None:
         from PySide6.QtWidgets import QFileDialog
 
@@ -367,6 +468,11 @@ class MainWindow(QMainWindow):
         from rsscore.ingest import Ingestor, NoFeedFound
 
         try:
+            if not self.cfg.desktop_fetches_locally:
+                title = await self.backend.suscribirse(url)
+                self._recargar_arbol()
+                self.statusBar().showMessage(f"Suscrito a {title}", 5000)
+                return
             async with Ingestor(self.conn, self.cfg) as ing:
                 feed = await ing.add_by_url(url)
         except NoFeedFound as exc:
@@ -491,7 +597,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)-7s %(name)s: %(message)s")
-    cfg = Config.load(args.config)
+    config_path = Path(args.config).expanduser() if args.config else default_config_path()
+    cfg = Config.load(config_path)
     if args.db:
         cfg.db_path = Path(args.db)
     conn = open_db(cfg.db_path, device_name=cfg.device_name or "escritorio")
@@ -503,7 +610,7 @@ def main(argv: list[str] | None = None) -> int:
     bucle = qasync.QEventLoop(app)
     asyncio.set_event_loop(bucle)
 
-    ventana = MainWindow(conn, cfg)
+    ventana = MainWindow(conn, cfg, config_path)
     ventana.show()
 
     if args.check:

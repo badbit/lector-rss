@@ -214,25 +214,32 @@ class Ingestor:
                 continue
 
             # Un editor puede regenerar el GUID sin cambiar la publicación. La
-            # URL canónica y la huella de contenido cubren ese caso.
-            duplicate = repo.duplicate_entry(self.conn, entry)
-            if duplicate:
-                twin_id, reason = duplicate
-                result.duplicate_of[entry.id] = twin_id
-                result.duplicates_removed += 1
-                if reason == "url" and self._content_changed(twin_id, entry):
-                    to_update.append((twin_id, entry))
-                else:
-                    result.skipped += 1
-                continue
+            # URL canónica y la huella de contenido cubren ese caso. Una fuente
+            # ``watch`` es la excepción deliberada: todos sus avisos comparten
+            # URL, pero cada huella representa un cambio histórico distinto.
+            if feed.source_kind != "watch":
+                duplicate = repo.duplicate_entry(self.conn, entry)
+                if duplicate:
+                    twin_id, reason = duplicate
+                    result.duplicate_of[entry.id] = twin_id
+                    result.duplicates_removed += 1
+                    if reason == "url" and self._content_changed(twin_id, entry):
+                        to_update.append((twin_id, entry))
+                    else:
+                        result.skipped += 1
+                    continue
 
-            pending_twin = next(
-                (
-                    candidate
-                    for candidate in to_insert
-                    if repo.entries_are_duplicates(candidate, entry)
-                ),
-                None,
+            pending_twin = (
+                next(
+                    (
+                        candidate
+                        for candidate in to_insert
+                        if repo.entries_are_duplicates(candidate, entry)
+                    ),
+                    None,
+                )
+                if feed.source_kind != "watch"
+                else None
             )
             if pending_twin:
                 result.duplicate_of[entry.id] = pending_twin.id

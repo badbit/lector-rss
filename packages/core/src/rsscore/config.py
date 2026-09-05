@@ -69,6 +69,17 @@ class HubConfig(BaseModel):
     compact_at_hour: int = 4      # compactación nocturna del change_log
 
 
+class DesktopConfig(BaseModel):
+    """Comportamiento del cliente gráfico de escritorio.
+
+    Con un hub configurado, éste es la fuente de verdad y descarga los feeds.
+    ``fetch_locally`` permite conservar un modo autónomo explícito para quien no
+    quiera desplegar el servicio.
+    """
+
+    fetch_locally: bool | None = None
+
+
 class Config(BaseModel):
     db_path: Path = Path("data/rss.db")
     device_name: str = ""
@@ -78,8 +89,16 @@ class Config(BaseModel):
     magazine: MagazineConfig = Field(default_factory=MagazineConfig)
     notify: NotifyConfig = Field(default_factory=NotifyConfig)
     hub: HubConfig = Field(default_factory=HubConfig)
+    desktop: DesktopConfig = Field(default_factory=DesktopConfig)
     hub_url: str = ""             # que usan los clientes para sincronizar
     hub_token: SecretStr = SecretStr("")
+
+    @property
+    def desktop_fetches_locally(self) -> bool:
+        """Por omisión sólo se descarga localmente cuando no existe un hub."""
+        if self.desktop.fetch_locally is not None:
+            return self.desktop.fetch_locally
+        return not bool(self.hub_url.strip())
 
     @classmethod
     def load(cls, path: str | Path | None = None) -> Config:

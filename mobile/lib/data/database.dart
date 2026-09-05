@@ -20,7 +20,8 @@ class AppDatabase {
   final Database db;
 
   /// `ruta` solo se pasa en las pruebas, que abren la base fuera de Android.
-  static Future<AppDatabase> open({String nombre = 'rss.db', String? ruta}) async {
+  static Future<AppDatabase> open(
+      {String nombre = 'rss.db', String? ruta}) async {
     ruta ??= p.join(await getDatabasesPath(), nombre);
     final db = await openDatabase(
       ruta,
@@ -105,12 +106,14 @@ class AppDatabase {
   }
 
   Future<String> deviceId() async {
-    final filas = await db.query('node', columns: ['device_id'], where: 'id = 1');
+    final filas =
+        await db.query('node', columns: ['device_id'], where: 'id = 1');
     return filas.first['device_id'] as String;
   }
 
   Future<int> cursor() async {
-    final filas = await db.query('node', columns: ['last_pull_seq'], where: 'id = 1');
+    final filas =
+        await db.query('node', columns: ['last_pull_seq'], where: 'id = 1');
     return filas.first['last_pull_seq'] as int;
   }
 
@@ -139,8 +142,16 @@ class AppDatabase {
   Future<void> vaciar() async {
     await db.transaction((txn) async {
       for (final tabla in [
-        'entry_tags', 'entry_state', 'entry_bodies', 'entries', 'feeds',
-        'folders', 'tags', 'field_clock', 'outbox', 'sync_pending',
+        'entry_tags',
+        'entry_state',
+        'entry_bodies',
+        'entries',
+        'feeds',
+        'folders',
+        'tags',
+        'field_clock',
+        'outbox',
+        'sync_pending',
       ]) {
         await txn.delete(tabla);
       }

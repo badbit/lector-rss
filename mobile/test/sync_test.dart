@@ -31,12 +31,17 @@ var _n = 0;
 Future<(AppDatabase, Repo, SyncEngine)> _abrir() async {
   final app = await AppDatabase.open(ruta: '${_tmp.path}/prueba${_n++}.db');
   final repo = Repo(app);
-  return (app, repo, SyncEngine(app: app, repo: repo, client: _clienteInerte()));
+  return (
+    app,
+    repo,
+    SyncEngine(app: app, repo: repo, client: _clienteInerte())
+  );
 }
 
 /// Un artículo con su feed, que es lo mínimo para que `entry_state` se aplique.
 Future<void> _sembrar(AppDatabase app, {String entryId = 'E1'}) async {
-  await app.db.insert('feeds', {'id': 'F1', 'url': 'https://ejemplo/feed', 'title': 'Feed'});
+  await app.db.insert(
+      'feeds', {'id': 'F1', 'url': 'https://ejemplo/feed', 'title': 'Feed'});
   await app.db.insert('entries', {
     'id': entryId,
     'feed_id': 'F1',
@@ -65,7 +70,8 @@ ChangeOp _op(
     );
 
 Future<Map<String, Object?>?> _estado(AppDatabase app, String id) async {
-  final filas = await app.db.query('entry_state', where: 'entry_id = ?', whereArgs: [id]);
+  final filas =
+      await app.db.query('entry_state', where: 'entry_id = ?', whereArgs: [id]);
   return filas.isEmpty ? null : filas.first;
 }
 
@@ -82,7 +88,9 @@ void main() {
     test('aplicar el mismo lote dos veces deja el mismo resultado', () async {
       final (app, _, sync) = await _abrir();
       await _sembrar(app);
-      final ops = [_op('entry_state', 'E1', 'read', true, lamport: 5, device: 'B')];
+      final ops = [
+        _op('entry_state', 'E1', 'read', true, lamport: 5, device: 'B')
+      ];
 
       final primera = await sync.applyOps(ops);
       final segunda = await sync.applyOps(ops);
@@ -94,7 +102,8 @@ void main() {
       expect((await _estado(app, 'E1'))!['read'], 1);
     });
 
-    test('«leído» y «guardado» no se pisan, llegue antes el que llegue', () async {
+    test('«leído» y «guardado» no se pisan, llegue antes el que llegue',
+        () async {
       // Dos campos de la misma fila con el MISMO reloj. Con un reloj por fila
       // el segundo se descartaría; con reloj por campo sobreviven los dos.
       for (final invertido in [false, true]) {
@@ -136,9 +145,10 @@ void main() {
       final (app, _, sync) = await _abrir();
       await _sembrar(app);
 
-      await sync.applyOps([_op('entry_state', 'E1', 'read', true, lamport: 20, device: 'A')]);
-      final tardia =
-          await sync.applyOps([_op('entry_state', 'E1', 'read', false, lamport: 3, device: 'A')]);
+      await sync.applyOps(
+          [_op('entry_state', 'E1', 'read', true, lamport: 20, device: 'A')]);
+      final tardia = await sync.applyOps(
+          [_op('entry_state', 'E1', 'read', false, lamport: 3, device: 'A')]);
 
       expect(tardia.ignored, 1);
       expect((await _estado(app, 'E1'))!['read'], 1);
@@ -172,7 +182,8 @@ void main() {
   });
 
   group('altas y bajas de artículos', () {
-    test('una entrada nueva llega por el diario después del snapshot', () async {
+    test('una entrada nueva llega por el diario después del snapshot',
+        () async {
       final (app, _, sync) = await _abrir();
       await app.db.insert('feeds', {
         'id': 'F1',
@@ -181,18 +192,27 @@ void main() {
       });
 
       final r = await sync.applyOps([
-        _op('entry', 'NUEVA', 'data', {
-          'id': 'NUEVA',
-          'feed_id': 'F1',
-          'url': 'https://ejemplo/nueva',
-          'title': 'Recién publicada',
-          'published_at': 2000,
-        }, lamport: 5, device: 'HUB'),
+        _op(
+            'entry',
+            'NUEVA',
+            'data',
+            {
+              'id': 'NUEVA',
+              'feed_id': 'F1',
+              'url': 'https://ejemplo/nueva',
+              'title': 'Recién publicada',
+              'published_at': 2000,
+            },
+            lamport: 5,
+            device: 'HUB'),
       ]);
 
       expect(r.applied, 1);
       expect(await _estado(app, 'NUEVA'), isNotNull);
-      expect((await app.db.query('entries', where: 'id = ?', whereArgs: ['NUEVA'])).length, 1);
+      expect(
+          (await app.db.query('entries', where: 'id = ?', whereArgs: ['NUEVA']))
+              .length,
+          1);
     });
 
     test('el tombstone elimina la copia local y su estado', () async {
@@ -205,7 +225,8 @@ void main() {
 
       expect(r.applied, 1);
       expect(await _estado(app, 'E1'), isNull);
-      expect(await app.db.query('entries', where: 'id = ?', whereArgs: ['E1']), isEmpty);
+      expect(await app.db.query('entries', where: 'id = ?', whereArgs: ['E1']),
+          isEmpty);
     });
   });
 
@@ -217,7 +238,8 @@ void main() {
       // El nombre del campo viene de la red y acaba interpolado en el SQL: si
       // la lista blanca fallara, esto sería una inyección.
       final r = await sync.applyOps([
-        _op('entry_state', 'E1', 'read = 1, starred', true, lamport: 2, device: 'B'),
+        _op('entry_state', 'E1', 'read = 1, starred', true,
+            lamport: 2, device: 'B'),
         _op('inventada', 'X', 'read', true, lamport: 2, device: 'B'),
       ]);
 
@@ -267,7 +289,8 @@ void main() {
       final (app, repo, sync) = await _abrir();
       await _sembrar(app);
 
-      await sync.applyOps([_op('entry_state', 'E1', 'read', true, lamport: 1, device: 'A')]);
+      await sync.applyOps(
+          [_op('entry_state', 'E1', 'read', true, lamport: 1, device: 'A')]);
       await repo.marcarLeido(['E1'], false);
 
       expect((await _estado(app, 'E1'))!['read'], 0);

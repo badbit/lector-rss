@@ -225,10 +225,11 @@ async def refresh_feed(feed_id: str) -> dict:
 
 
 @router.post("/refresh")
-async def refresh_all() -> dict:
+async def refresh_all(force: bool = False) -> dict:
     from rsscore.ingest import Ingestor
 
-    results = await Ingestor(db(), config()).refresh_due()
+    ingestor = Ingestor(db(), config())
+    results = await (ingestor.refresh_all() if force else ingestor.refresh_due())
     total = sum(len(r.new_entries) for r in results)
     duplicadas = sum(r.duplicates_removed for r in results)
     bus.publish({"type": "entries_changed"})

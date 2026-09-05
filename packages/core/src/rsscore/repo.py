@@ -200,6 +200,39 @@ def folder_by_name(conn: sqlite3.Connection, name: str) -> Folder | None:
     return _folder(row) if row else None
 
 
+def rename_folder(conn: sqlite3.Connection, folder_id: str, name: str) -> None:
+    name = name.strip()
+    if not name:
+        raise ValueError("El nombre de la carpeta no puede estar vacío")
+    lam = tick_lamport(conn)
+    conn.execute(
+        "UPDATE folders SET name = ?, lamport = ?, device_id = ?, updated_at = ? WHERE id = ?",
+        (name, lam, device_id(conn), now_ms(), folder_id),
+    )
+    append_change(conn, Entity.FOLDER, folder_id, "name", name, lamport=lam)
+
+
+def delete_folder(conn: sqlite3.Connection, folder_id: str) -> None:
+    """Retira una carpeta sin borrar sus feeds ni sus subcarpetas."""
+    for row in conn.execute("SELECT id FROM feeds WHERE folder_id = ?", (folder_id,)).fetchall():
+        set_feed_folder(conn, row["id"], None)
+    for row in conn.execute("SELECT id FROM folders WHERE parent_id = ?", (folder_id,)).fetchall():
+        child_id = row["id"]
+        lam = tick_lamport(conn)
+        conn.execute(
+            "UPDATE folders SET parent_id = NULL, lamport = ?, device_id = ?, updated_at = ? "
+            "WHERE id = ?",
+            (lam, device_id(conn), now_ms(), child_id),
+        )
+        append_change(conn, Entity.FOLDER, child_id, "parent_id", None, lamport=lam)
+    lam = tick_lamport(conn)
+    conn.execute(
+        "UPDATE folders SET deleted = 1, lamport = ?, device_id = ?, updated_at = ? WHERE id = ?",
+        (lam, device_id(conn), now_ms(), folder_id),
+    )
+    append_change(conn, Entity.FOLDER, folder_id, "deleted", True, lamport=lam)
+
+
 def descendant_folder_ids(conn: sqlite3.Connection, folder_ids: Iterable[str]) -> list[str]:
     """Expande carpetas a toda su descendencia (las carpetas anidan)."""
     out: list[str] = []
@@ -333,6 +366,17 @@ def set_feed_folder(conn: sqlite3.Connection, feed_id: str, folder_id: str | Non
         (folder_id, lam, device_id(conn), now_ms(), feed_id),
     )
     append_change(conn, Entity.FEED, feed_id, "folder_id", folder_id, lamport=lam)
+
+
+def set_feed_title(conn: sqlite3.Connection, feed_id: str, title: str | None) -> None:
+    value = title.strip() if title and title.strip() else None
+    lam = tick_lamport(conn)
+    conn.execute(
+        "UPDATE feeds SET custom_title = ?, lamport = ?, device_id = ?, updated_at = ? "
+        "WHERE id = ?",
+        (value, lam, device_id(conn), now_ms(), feed_id),
+    )
+    append_change(conn, Entity.FEED, feed_id, "custom_title", value, lamport=lam)
 
 
 def delete_feed(conn: sqlite3.Connection, feed_id: str) -> None:

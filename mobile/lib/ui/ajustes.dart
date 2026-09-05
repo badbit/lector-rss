@@ -4,6 +4,7 @@ library;
 import 'package:flutter/material.dart';
 
 import '../app_state.dart';
+import '../background.dart';
 
 class AjustesPage extends StatefulWidget {
   const AjustesPage({super.key, required this.estado});
@@ -20,6 +21,7 @@ class _AjustesPageState extends State<AjustesPage> {
   late final TextEditingController _token =
       TextEditingController(text: widget.estado.hubToken);
   late int _dias = widget.estado.ventanaDias;
+  late bool _segundoPlano = widget.estado.sincronizacionEnSegundoPlano;
   bool _probando = false;
   String? _resultado;
   bool _correcto = false;
@@ -41,7 +43,9 @@ class _AjustesPageState extends State<AjustesPage> {
     setState(() {
       _probando = false;
       _correcto = ok;
-      _resultado = ok ? 'Conectado con el hub' : (widget.estado.ultimoError ?? 'Sin respuesta');
+      _resultado = ok
+          ? 'Conectado con el hub'
+          : (widget.estado.ultimoError ?? 'Sin respuesta');
     });
   }
 
@@ -50,7 +54,9 @@ class _AjustesPageState extends State<AjustesPage> {
       url: _url.text,
       token: _token.text,
       dias: _dias,
+      segundoPlano: _segundoPlano,
     );
+    await configurarSincronizacionEnSegundoPlano(_segundoPlano);
     if (!mounted) return;
     Navigator.of(context).pop();
   }
@@ -85,7 +91,8 @@ class _AjustesPageState extends State<AjustesPage> {
             ),
           ),
           const SizedBox(height: 24),
-          Text('Ventana de sincronización', style: Theme.of(context).textTheme.titleSmall),
+          Text('Ventana de sincronización',
+              style: Theme.of(context).textTheme.titleSmall),
           const Text(
             'El archivo del hub es permanente. El móvil solo replica los últimos '
             'días, más lo guardado y lo que esté sin leer.',
@@ -101,6 +108,15 @@ class _AjustesPageState extends State<AjustesPage> {
             selected: {_dias},
             onSelectionChanged: (s) => setState(() => _dias = s.first),
           ),
+          const SizedBox(height: 16),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Sincronizar en segundo plano'),
+            subtitle: const Text(
+                'Android intentará sincronizar cada 30 minutos cuando haya red.'),
+            value: _segundoPlano,
+            onChanged: (value) => setState(() => _segundoPlano = value),
+          ),
           const SizedBox(height: 24),
           Row(
             children: [
@@ -108,7 +124,9 @@ class _AjustesPageState extends State<AjustesPage> {
                 onPressed: _probando ? null : _probar,
                 icon: _probando
                     ? const SizedBox(
-                        width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2))
                     : const Icon(Icons.wifi_tethering),
                 label: const Text('Probar'),
               ),

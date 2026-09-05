@@ -25,6 +25,12 @@ hub:
 hub_url: http://hub.tu-tailnet.ts.net:8787
 hub_token: cambia-esto-por-un-token-largo-y-aleatorio
 
+# El hub es la fuente de verdad y el único que descarga feeds cuando hay una
+# URL configurada. Activa esta opción únicamente para usar el escritorio como
+# lector autónomo (sin hub) o para una instalación deliberadamente híbrida.
+desktop:
+  fetch_locally: false
+
 # ---------------------------------------------------------------- Obsidian
 obsidian:
   vault_path: ~/Documentos/Boveda

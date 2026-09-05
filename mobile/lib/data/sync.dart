@@ -24,7 +24,12 @@ const _camposPorEntidad = <String, Set<String>>{
   'entry_tag': {'deleted'},
   'tag': {'name', 'color', 'deleted'},
   'feed': {
-    'url', 'title', 'custom_title', 'folder_id', 'disabled', 'deleted',
+    'url',
+    'title',
+    'custom_title',
+    'folder_id',
+    'disabled',
+    'deleted',
     'source_kind',
   },
   'folder': {'name', 'parent_id', 'position', 'deleted'},
@@ -91,37 +96,54 @@ class SyncEngine {
     final foto = await client.snapshot(deviceId, days: scope.days);
 
     await db.transaction((txn) async {
-      await _volcar(txn, 'folders', foto['folders'],
-          (j) => Folder.fromJson(j).toRow());
-      await _volcar(txn, 'feeds', foto['feeds'], (j) => Feed.fromJson(j).toRow());
-      await _volcar(txn, 'tags', foto['tags'], (j) => {
-            'id': j['id'],
-            'name': j['name'] ?? '',
-            'color': j['color'],
-            'deleted': _entero(j['deleted']),
-          });
-      await _volcar(txn, 'entries', foto['entries'], (j) => {
-            'id': j['id'],
-            'feed_id': j['feed_id'],
-            'url': j['url'],
-            'title': j['title'] ?? '',
-            'author': j['author'],
-            'summary': j['summary'],
-            'published_at': j['published_at'] ?? 0,
-            'has_body': 0,
-          });
-      await _volcar(txn, 'entry_state', foto['state'], (j) => {
-            'entry_id': j['entry_id'],
-            'read': _entero(j['read']),
-            'starred': _entero(j['starred']),
-            'read_at': j['read_at'],
-            'star_at': j['star_at'],
-          });
-      await _volcar(txn, 'entry_tags', foto['entry_tags'], (j) => {
-            'entry_id': j['entry_id'],
-            'tag_id': j['tag_id'],
-            'deleted': _entero(j['deleted']),
-          });
+      await _volcar(
+          txn, 'folders', foto['folders'], (j) => Folder.fromJson(j).toRow());
+      await _volcar(
+          txn, 'feeds', foto['feeds'], (j) => Feed.fromJson(j).toRow());
+      await _volcar(
+          txn,
+          'tags',
+          foto['tags'],
+          (j) => {
+                'id': j['id'],
+                'name': j['name'] ?? '',
+                'color': j['color'],
+                'deleted': _entero(j['deleted']),
+              });
+      await _volcar(
+          txn,
+          'entries',
+          foto['entries'],
+          (j) => {
+                'id': j['id'],
+                'feed_id': j['feed_id'],
+                'url': j['url'],
+                'title': j['title'] ?? '',
+                'author': j['author'],
+                'summary': j['summary'],
+                'published_at': j['published_at'] ?? 0,
+                'has_body': 0,
+              });
+      await _volcar(
+          txn,
+          'entry_state',
+          foto['state'],
+          (j) => {
+                'entry_id': j['entry_id'],
+                'read': _entero(j['read']),
+                'starred': _entero(j['starred']),
+                'read_at': j['read_at'],
+                'star_at': j['star_at'],
+              });
+      await _volcar(
+          txn,
+          'entry_tags',
+          foto['entry_tags'],
+          (j) => {
+                'entry_id': j['entry_id'],
+                'tag_id': j['tag_id'],
+                'deleted': _entero(j['deleted']),
+              });
     });
 
     await app.setCursor((foto['cursor'] ?? 0) as int);
@@ -152,7 +174,8 @@ class SyncEngine {
       final lote = await repo.pendientesDeSubir();
       if (lote.isEmpty) break;
 
-      final respuesta = await client.push(deviceId, lote.map((e) => e.$2).toList());
+      final respuesta =
+          await client.push(deviceId, lote.map((e) => e.$2).toList());
       // Solo ahora, con el hub habiendo confirmado, se vacía la cola: si se
       // borrase antes, un corte de red perdería el cambio para siempre.
       await repo.limpiarOutbox(lote.map((e) => e.$1).toList());
@@ -240,7 +263,8 @@ class SyncEngine {
         }
         // Si es una edición, el cuerpo cacheado ya no corresponde a estos
         // metadatos. Se volverá a pedir al hub cuando se abra el artículo.
-        await db.delete('entry_bodies', where: 'entry_id = ?', whereArgs: [op.entityId]);
+        await db.delete('entry_bodies',
+            where: 'entry_id = ?', whereArgs: [op.entityId]);
         await db.rawInsert('''
           INSERT INTO entries (id, feed_id, url, title, author, summary, published_at, has_body)
           VALUES (?, ?, ?, ?, ?, ?, ?, 0)
@@ -264,7 +288,9 @@ class SyncEngine {
       case 'entry_state':
         // Puede llegar el estado de un artículo que este móvil aún no tiene.
         if (!await _existe('entries', 'id', op.entityId)) {
-          if (await _reloj('entry', op.entityId, 'deleted') != null) return 'ignored';
+          if (await _reloj('entry', op.entityId, 'deleted') != null) {
+            return 'ignored';
+          }
           return 'pending';
         }
         final columnaFecha = op.field == 'read' ? 'read_at' : 'star_at';
@@ -279,7 +305,9 @@ class SyncEngine {
         final partes = op.entityId.split(':');
         if (partes.length != 2) return 'ignored';
         if (!await _existe('entries', 'id', partes[0])) {
-          if (await _reloj('entry', partes[0], 'deleted') != null) return 'ignored';
+          if (await _reloj('entry', partes[0], 'deleted') != null) {
+            return 'ignored';
+          }
           return 'pending';
         }
         if (!await _existe('tags', 'id', partes[1])) return 'pending';
@@ -325,7 +353,8 @@ class SyncEngine {
   Future<void> _crearEsqueleto(String tabla, String id) async {
     switch (tabla) {
       case 'feeds':
-        await db.insert('feeds', {'id': id, 'url': 'urn:pendiente:$id', 'title': ''});
+        await db.insert(
+            'feeds', {'id': id, 'url': 'urn:pendiente:$id', 'title': ''});
       case 'folders':
         await db.insert('folders', {'id': id, 'name': ''});
       case 'tags':

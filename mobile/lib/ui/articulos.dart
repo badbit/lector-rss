@@ -176,13 +176,15 @@ class _ArticulosPageState extends State<ArticulosPage> {
         color: Colors.blueGrey,
         alignment: Alignment.centerLeft,
         padding: const EdgeInsets.only(left: 20),
-        child: Icon(e.read ? Icons.mark_email_unread : Icons.done, color: Colors.white),
+        child: Icon(e.read ? Icons.mark_email_unread : Icons.done,
+            color: Colors.white),
       ),
       secondaryBackground: Container(
         color: Colors.amber.shade700,
         alignment: Alignment.centerRight,
         padding: const EdgeInsets.only(right: 20),
-        child: Icon(e.starred ? Icons.star_border : Icons.star, color: Colors.white),
+        child: Icon(e.starred ? Icons.star_border : Icons.star,
+            color: Colors.white),
       ),
       confirmDismiss: (direccion) async {
         // Deslizar no elimina nada: alterna leído o guardado y la fila se queda.
@@ -199,13 +201,16 @@ class _ArticulosPageState extends State<ArticulosPage> {
           e.title.isEmpty ? '(sin título)' : e.title,
           maxLines: 3,
           overflow: TextOverflow.ellipsis,
-          style: TextStyle(fontWeight: e.read ? FontWeight.normal : FontWeight.w600),
+          style: TextStyle(
+              fontWeight: e.read ? FontWeight.normal : FontWeight.w600),
         ),
         subtitle: Text(
           '${_titulosFeed[e.feedId] ?? ''} · $fecha',
           style: tema.textTheme.bodySmall,
         ),
-        trailing: e.starred ? const Icon(Icons.star, size: 18, color: Colors.amber) : null,
+        trailing: e.starred
+            ? const Icon(Icons.star, size: 18, color: Colors.amber)
+            : null,
         onTap: () => _abrir(e),
       ),
     );
