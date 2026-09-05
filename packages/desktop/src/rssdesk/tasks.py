@@ -8,14 +8,15 @@ hilos. Lo que no se puede es bloquear: cualquier cosa lenta tiene que ser await.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import sqlite3
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 
 import httpx
 from rsscore import repo
 from rsscore.config import Config
-from rsscore.models import ExportKind
+from rsscore.models import Entry, ExportJob, ExportKind
 from rsscore.notify import Notification, build_notifier, coalesce
 
 log = logging.getLogger("rssdesk.tasks")
@@ -24,11 +25,31 @@ log = logging.getLogger("rssdesk.tasks")
 class Backend:
     """Envuelve el núcleo para que la ventana no sepa de asyncio ni de SQL."""
 
-    def __init__(self, conn: sqlite3.Connection, cfg: Config) -> None:
+    def __init__(
+        self,
+        conn: sqlite3.Connection,
+        cfg: Config,
+        *,
+        http_client: httpx.AsyncClient | None = None,
+    ) -> None:
         self.conn = conn
         self.cfg = cfg
         self.notificador = build_notifier(cfg.notify)
         self._refrescando = False
+        self._http_client = http_client
+
+    @contextlib.asynccontextmanager
+    async def _hub(self, *, timeout: float = 60) -> AsyncIterator[httpx.AsyncClient]:
+        """Cliente autenticado; la inyección permite probar contra FastAPI real."""
+        if self._http_client is not None:
+            yield self._http_client
+            return
+        token = self.cfg.hub_token.get_secret_value()
+        headers = {"Authorization": f"Bearer {token}"} if token else {}
+        async with httpx.AsyncClient(
+            base_url=self.cfg.hub_url.rstrip("/"), headers=headers, timeout=timeout
+        ) as client:
+            yield client
 
     # ------------------------------------------------------------- refresco
     async def refrescar(
@@ -71,11 +92,7 @@ class Backend:
         if not self.cfg.hub_url:
             return (0, 0)
         ruta = f"/feeds/{feed_id}/refresh" if feed_id else "/feeds/refresh"
-        token = self.cfg.hub_token.get_secret_value()
-        headers = {"Authorization": f"Bearer {token}"} if token else {}
-        async with httpx.AsyncClient(
-            base_url=self.cfg.hub_url.rstrip("/"), headers=headers, timeout=60
-        ) as client:
+        async with self._hub() as client:
             response = await client.post(ruta, params={"force": todos} if not feed_id else None)
             response.raise_for_status()
             data = response.json()
@@ -101,11 +118,7 @@ class Backend:
                 feed = await ingestor.add_by_url(url, folder_id=folder_id)
             return feed.display_title
 
-        token = self.cfg.hub_token.get_secret_value()
-        headers = {"Authorization": f"Bearer {token}"} if token else {}
-        async with httpx.AsyncClient(
-            base_url=self.cfg.hub_url.rstrip("/"), headers=headers, timeout=60
-        ) as client:
+        async with self._hub() as client:
             response = await client.post("/feeds", json={"url": url, "folder_id": folder_id})
             response.raise_for_status()
             data = response.json()
@@ -126,7 +139,12 @@ class Backend:
             return "sin hub configurado"
         from rsscore.sync import SyncClient
 
-        cliente = SyncClient(self.conn, self.cfg.hub_url, self.cfg.hub_token.get_secret_value())
+        cliente = SyncClient(
+            self.conn,
+            self.cfg.hub_url,
+            self.cfg.hub_token.get_secret_value(),
+            client=self._http_client,
+        )
         try:
             stats = await cliente.sync_once(name=self.cfg.device_name or "escritorio")
             return str(stats)
@@ -137,11 +155,41 @@ class Backend:
             await cliente.aclose()
 
     # --------------------------------------------------------- exportación
+    async def cargar_articulo(self, entry_id: str) -> Entry | None:
+        """Trae y cachea el cuerpo que el diario omite deliberadamente."""
+        entry = repo.get_entry(self.conn, entry_id, with_body=True)
+        if entry is None or not self.cfg.hub_url:
+            return entry
+        cached = self.conn.execute(
+            "SELECT 1 FROM entry_bodies WHERE entry_id = ?", (entry_id,)
+        ).fetchone()
+        if cached:
+            return entry
+        async with self._hub() as client:
+            response = await client.get(f"/entries/{entry_id}")
+            response.raise_for_status()
+            data = response.json()
+        repo.update_entry_body(
+            self.conn,
+            entry_id,
+            html=data.get("body_html"),
+            text=data.get("body_text"),
+        )
+        return repo.get_entry(self.conn, entry_id, with_body=True)
+
+    async def _asegurar_cuerpos(self, entry_ids: list[str]) -> None:
+        if not self.cfg.hub_url:
+            return
+        for entry_id in dict.fromkeys(entry_ids):
+            if await self.cargar_articulo(entry_id) is None:
+                raise RuntimeError(f"El hub ya no contiene el artículo {entry_id}")
+
     async def exportar_obsidian(self, entry_ids: list[str]) -> list[str]:
         from rsscore.export.obsidian import export_to_obsidian
 
         if not self.cfg.obsidian.vault_path:
             raise RuntimeError("Configura obsidian.vault_path en el config.yaml")
+        await self._asegurar_cuerpos(entry_ids)
         rutas = await asyncio.to_thread(export_to_obsidian, self.conn, entry_ids, self.cfg.obsidian)
         return [str(r) for r in rutas]
 
@@ -160,6 +208,36 @@ class Backend:
         return str(getattr(resultado, "path", resultado))
 
     # ------------------------------------------------ cola de exportaciones
+    async def procesar_exportacion_pendiente(self, *, target: str = "desktop") -> bool:
+        """Procesa un trabajo local o, con hub, uno reclamado por HTTP."""
+        if not self.cfg.hub_url:
+            trabajo = repo.claim_export(self.conn, target)
+            if trabajo is None:
+                return False
+            resultado, error = await self._resultado_exportacion(trabajo)
+            repo.finish_export(self.conn, trabajo.id, result=resultado, error=error)
+            return True
+
+        # El trabajo puede referirse a una entrada recién ingerida. Se sincroniza
+        # antes de reclamarlo para no dejarlo en ``running`` por no tenerla aún.
+        sincronizacion = await self.sincronizar()
+        if sincronizacion.startswith("error:"):
+            raise RuntimeError(sincronizacion)
+        async with self._hub() as client:
+            response = await client.get("/export/jobs/next", params={"target": target})
+            response.raise_for_status()
+            data = response.json()
+            if data is None:
+                return False
+            trabajo = ExportJob.model_validate(data)
+            resultado, error = await self._resultado_exportacion(trabajo)
+            terminado = await client.post(
+                "/export/jobs/finish",
+                json={"job_id": trabajo.id, "result": resultado, "error": error},
+            )
+            terminado.raise_for_status()
+        return True
+
     async def worker_exportaciones(self, stop: asyncio.Event, *, target: str = "desktop") -> None:
         """Materializa lo que el móvil encoló: la bóveda de Obsidian está aquí.
 
@@ -168,11 +246,8 @@ class Backend:
         """
         while not stop.is_set():
             try:
-                trabajo = repo.claim_export(self.conn, target)
-                if trabajo is None:
+                if not await self.procesar_exportacion_pendiente(target=target):
                     await asyncio.wait_for(stop.wait(), timeout=10)
-                    continue
-                await self._ejecutar_trabajo(trabajo)
             except TimeoutError:
                 continue
             except asyncio.CancelledError:
@@ -181,21 +256,20 @@ class Backend:
                 log.exception("Fallo en la cola de exportaciones")
                 await asyncio.sleep(10)
 
-    async def _ejecutar_trabajo(self, trabajo) -> None:
+    async def _resultado_exportacion(self, trabajo: ExportJob) -> tuple[dict, str | None]:
         try:
             entry_ids = trabajo.params.get("entry_ids", [])
             if trabajo.kind == ExportKind.OBSIDIAN:
                 rutas = await self.exportar_obsidian(entry_ids)
-                repo.finish_export(self.conn, trabajo.id, result={"paths": rutas})
+                return {"paths": rutas, "count": len(rutas)}, None
             elif trabajo.kind == ExportKind.KINDLE:
                 await self.enviar_kindle(entry_ids)
-                repo.finish_export(self.conn, trabajo.id, result={"enviados": len(entry_ids)})
-            else:
-                repo.finish_export(
-                    self.conn, trabajo.id, error=f"tipo no soportado aquí: {trabajo.kind}"
-                )
+                return {"enviados": len(entry_ids)}, None
+            return {}, f"tipo no soportado aquí: {trabajo.kind}"
         except Exception as exc:
-            repo.finish_export(self.conn, trabajo.id, error=str(exc))
+            from rsscore.export.jobs import describe_error
+
+            return {}, describe_error(exc)
 
     # ------------------------------------------------------------- bucles
     async def bucle_refresco(self, stop: asyncio.Event, callback, *, cada: int = 60) -> None:

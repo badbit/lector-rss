@@ -68,7 +68,7 @@ def _entries_chunk(conn: sqlite3.Connection, ids: list[str]) -> dict:
         return {"entries": [], "state": [], "entry_tags": []}
     marcas = ",".join("?" * len(ids))
     entradas = [
-        dict(r)
+        {**dict(r), "has_body": 0}
         for r in conn.execute(
             "SELECT id, feed_id, guid_hash, content_hash, url, title, author, summary, "
             f"published_at, updated_at, fetched_at, has_body, enclosure_url, enclosure_type "

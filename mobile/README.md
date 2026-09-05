@@ -12,7 +12,7 @@ contrato de la API y los puntos que hay que respetar al tocar la sincronización
 está en [`../docs/android.md`](../docs/android.md).
 
 ```bash
-flutter test      # 11 pruebas del motor de sincronización, sin emulador
+flutter test      # 13 pruebas del motor de sincronización, sin emulador
 flutter analyze
 flutter build apk --debug
 ```

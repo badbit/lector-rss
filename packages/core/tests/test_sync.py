@@ -297,14 +297,19 @@ def test_quitar_la_estrella_a_lo_antiguo_llega_igual(escenario):
 def test_snapshot_arranca_un_cliente_nuevo(escenario):
     hub, a, b, entry_id, feed = escenario
     repo.set_starred(hub.conn, [entry_id], True)
+    repo.update_entry_body(
+        hub.conn, entry_id, html="<p>Cuerpo sólo en el hub</p>", text="Cuerpo sólo en el hub"
+    )
 
     with tempfile.TemporaryDirectory() as d:
         nuevo = Nodo("tablet", Path(d))
         foto = build_snapshot(hub.conn, SyncScope(days=30))
+        assert foto["entries"][0]["has_body"] == 0
         apply_snapshot(nuevo.conn, foto)
 
         assert len(repo.list_feeds(nuevo.conn)) == 1
         assert nuevo.estado(entry_id).starred is True
+        assert repo.get_body(nuevo.conn, entry_id) == (None, None)
         assert nuevo.conn.execute(
             "SELECT last_pull_seq FROM node WHERE id = 1"
         ).fetchone()["last_pull_seq"] == foto["cursor"]

@@ -16,10 +16,13 @@ Código en `mobile/`. Flutter 3.35 / Dart 3.9, `sqflite` con SQL directo.
 | Navegación | carpetas, feeds y contadores de no leídos |
 | Lectura | lista paginada, artículo sin JavaScript, cuerpo cacheado |
 | Marcar | leído y guardado, con gestos en la lista |
+| Suscripciones | alta de feeds o sitios desde el móvil |
+| Segundo plano | sincronización periódica con WorkManager |
+| Exportar | Obsidian mediante el escritorio y Kindle mediante el hub |
+| Credenciales | token guardado en el almacén seguro de Android |
 | Recuperación | borrar la copia local y volver a traérsela del hub |
 
-Pendiente: avisos por UnifiedPush, sincronización en segundo plano con
-WorkManager, exportar a Obsidian/Kindle desde el móvil y empaquetado para F-Droid.
+Pendiente: avisos por UnifiedPush y empaquetado para F-Droid.
 
 ## Compilar
 

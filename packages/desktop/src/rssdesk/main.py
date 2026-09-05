@@ -257,8 +257,25 @@ class MainWindow(QMainWindow):
         feed = repo.get_feed(self.conn, completa.feed_id)
         etiquetas = [t.name for t in repo.entry_tags(self.conn, completa.id)]
         self.articulo.mostrar(completa, feed.display_title if feed else "", etiquetas)
+        if self.cfg.hub_url and not self.conn.execute(
+            "SELECT 1 FROM entry_bodies WHERE entry_id = ?", (completa.id,)
+        ).fetchone():
+            self._lanzar(self._cargar_cuerpo(completa.id))
         # Marcar como leído tras un momento, no al pasar de largo con las flechas.
         QTimer.singleShot(700, lambda fila=index.row(): self._marcar_leido_si_sigue(fila))
+
+    async def _cargar_cuerpo(self, entry_id: str) -> None:
+        try:
+            completa = await self.backend.cargar_articulo(entry_id)
+        except Exception as exc:
+            log.warning("No se pudo traer el cuerpo de %s: %s", entry_id, exc)
+            return
+        actual = self.articulo.entrada_actual
+        if completa is None or actual is None or actual.id != entry_id:
+            return
+        feed = repo.get_feed(self.conn, completa.feed_id)
+        etiquetas = [t.name for t in repo.entry_tags(self.conn, completa.id)]
+        self.articulo.mostrar(completa, feed.display_title if feed else "", etiquetas)
 
     def _marcar_leido_si_sigue(self, fila: int) -> None:
         actual = self.lista.currentIndex().row()
