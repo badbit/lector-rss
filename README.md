@@ -33,6 +33,11 @@ una cola de cambios que sube cuando puede.
 | Exportadores (Obsidian, Kindle, revista EPUB) | funcionando |
 | Cliente Android (Flutter): lectura sin conexión, sincronización, ámbito parcial | funcionando — guía en `docs/android.md` |
 
+La [revisión de desarrollo](docs/desarrollo.md) recoge las limitaciones verificadas
+y las siguientes prioridades. En particular, falta transferir a los clientes los
+artículos que llegan al hub después de su copia inicial y conectar el trabajador
+de exportaciones del escritorio con la cola remota.
+
 ## Instalación
 
 ```bash
@@ -142,11 +147,15 @@ aviso agrupado, no cuarenta.
 ## Pruebas
 
 ```bash
-.venv/bin/python -m pytest packages/core/tests packages/hub/tests -q
+.venv/bin/python -m pytest -q
+.venv/bin/ruff check packages
 ```
 
 Incluyen convergencia entre dispositivos con conflictos reales, feeds rotos,
 fechas imposibles, GUID duplicados y el ciclo completo hub↔cliente por HTTP.
+Las pruebas de escritorio usan Qt en modo `offscreen`. Las del arranque por
+snapshot comprueban también los relojes por campo, la reversión ante errores,
+la coherencia frente a escrituras concurrentes y el límite de la copia parcial.
 
 ## Licencia
 

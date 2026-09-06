@@ -78,7 +78,7 @@ def is_entry_in_scope(
         return True
     if scope.days is None:
         return True
-    limite = (now or now_ms()) - scope.days * 86_400_000
+    limite = (now if now is not None else now_ms()) - scope.days * 86_400_000
     return fila["published_at"] >= limite
 
 
@@ -143,6 +143,12 @@ def entries_in_scope(
     offset: int = 0,
 ) -> list[str]:
     """Ids de las entradas que el cliente debe replicar, más recientes primero."""
+    if offset < 0 or (limit is not None and limit < 0):
+        raise ValueError("El límite y el desplazamiento no pueden ser negativos")
+    restantes = max(0, scope.max_entries - offset)
+    cantidad = min(limit if limit is not None else scope.max_entries, restantes)
+    if cantidad <= 0:
+        return []
     where = ["1=1"]
     params: list = []
 
@@ -156,17 +162,17 @@ def entries_in_scope(
     ventana: list[str] = []
     if scope.days is not None:
         ventana.append("e.published_at >= ?")
-        params.append((since or now_ms()) - scope.days * 86_400_000)
-    if scope.include_starred:
-        ventana.append("s.starred = 1")
-    if scope.include_unread:
-        ventana.append("s.read = 0")
+        params.append((since if since is not None else now_ms()) - scope.days * 86_400_000)
+        if scope.include_starred:
+            ventana.append("s.starred = 1")
+        if scope.include_unread:
+            ventana.append("COALESCE(s.read, 0) = 0")
     if ventana:
         where.append("(" + " OR ".join(ventana) + ")")
 
     sql = (
         "SELECT e.id FROM entries e LEFT JOIN entry_state s ON s.entry_id = e.id "
-        f"WHERE {' AND '.join(where)} ORDER BY e.published_at DESC LIMIT ? OFFSET ?"
+        f"WHERE {' AND '.join(where)} ORDER BY e.published_at DESC, e.id LIMIT ? OFFSET ?"
     )
-    params += [min(limit or scope.max_entries, scope.max_entries), offset]
+    params += [cantidad, offset]
     return [r["id"] for r in conn.execute(sql, params)]

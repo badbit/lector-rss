@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Iterator
+from contextlib import contextmanager
 
 from ..ids import now_ms
 from ..models import SyncScope
@@ -18,6 +19,24 @@ from .scope import entries_in_scope
 __all__ = ["apply_snapshot", "build_snapshot", "iter_snapshot_chunks"]
 
 SNAPSHOT_VERSION = 1
+
+
+@contextmanager
+def _transaction(conn: sqlite3.Connection) -> Iterator[None]:
+    """Una foto coherente, también dentro de una transacción del llamador.
+
+    Las conexiones del núcleo usan autocommit. Un savepoint mantiene la misma
+    vista durante todas las lecturas y revierte por completo una importación
+    fallida sin confirmar escrituras ajenas.
+    """
+    conn.execute("SAVEPOINT rss_snapshot")
+    try:
+        yield
+    except BaseException:
+        conn.execute("ROLLBACK TO rss_snapshot")
+        raise
+    finally:
+        conn.execute("RELEASE rss_snapshot")
 
 
 def _cursor(conn: sqlite3.Connection) -> int:
@@ -60,12 +79,19 @@ def _structure(conn: sqlite3.Connection) -> dict:
                 "FROM saved_searches"
             )
         ],
+        "field_clocks": [
+            dict(r)
+            for r in conn.execute(
+                "SELECT entity, entity_id, field, lamport, device_id FROM field_clock "
+                "WHERE entity IN ('folder', 'feed', 'tag', 'rule', 'saved_search')"
+            )
+        ],
     }
 
 
 def _entries_chunk(conn: sqlite3.Connection, ids: list[str]) -> dict:
     if not ids:
-        return {"entries": [], "state": [], "entry_tags": []}
+        return {"entries": [], "state": [], "entry_tags": [], "field_clocks": []}
     marcas = ",".join("?" * len(ids))
     entradas = [
         dict(r)
@@ -92,25 +118,46 @@ def _entries_chunk(conn: sqlite3.Connection, ids: list[str]) -> dict:
             ids,
         )
     ]
-    return {"entries": entradas, "state": estado, "entry_tags": etiquetas}
+    relojes = [
+        dict(r)
+        for r in conn.execute(
+            "SELECT entity, entity_id, field, lamport, device_id FROM field_clock "
+            "WHERE entity IN ('entry_state', 'entry_tag') AND "
+            "CASE WHEN entity = 'entry_tag' "
+            "THEN substr(entity_id, 1, instr(entity_id, ':') - 1) "
+            f"ELSE entity_id END IN ({marcas})",
+            ids,
+        )
+    ]
+    return {
+        "entries": entradas, "state": estado, "entry_tags": etiquetas, "field_clocks": relojes,
+    }
 
 
-def build_snapshot(conn: sqlite3.Connection, scope: SyncScope) -> dict:
-    """Foto completa del ámbito. Sin cuerpos: se piden bajo demanda al abrir."""
-    cursor = _cursor(conn)
-    ids = entries_in_scope(conn, scope)
-    datos = _entries_chunk(conn, ids)
+def _header(conn: sqlite3.Connection, scope: SyncScope) -> dict:
     return {
         "version": SNAPSHOT_VERSION,
-        "cursor": cursor,
+        "cursor": _cursor(conn),
         "generated_at": now_ms(),
         "scope": scope.model_dump(),
         "server_lamport": conn.execute("SELECT lamport FROM node WHERE id = 1").fetchone()[
             "lamport"
         ],
         **_structure(conn),
-        **datos,
     }
+
+
+def build_snapshot(conn: sqlite3.Connection, scope: SyncScope) -> dict:
+    """Foto completa del ámbito. Sin cuerpos: se piden bajo demanda al abrir."""
+    with _transaction(conn):
+        cabecera = _header(conn, scope)
+        ids = entries_in_scope(conn, scope, since=cabecera["generated_at"])
+        datos = _entries_chunk(conn, ids)
+        return {
+            **cabecera,
+            **datos,
+            "field_clocks": cabecera["field_clocks"] + datos["field_clocks"],
+        }
 
 
 def iter_snapshot_chunks(
@@ -120,42 +167,49 @@ def iter_snapshot_chunks(
 
     Con 500 feeds y años de archivo, construir el JSON entero en memoria no es una
     opción; el primer trozo lleva la estructura y los siguientes solo artículos.
+    Quien abandone la iteración debe cerrar el generador para liberar la lectura.
     """
-    cursor = _cursor(conn)
-    yield {
-        "version": SNAPSHOT_VERSION,
-        "cursor": cursor,
-        "generated_at": now_ms(),
-        "scope": scope.model_dump(),
-        "chunk": 0,
-        "final": False,
-        **_structure(conn),
-        "entries": [],
-        "state": [],
-        "entry_tags": [],
-    }
-    offset, indice = 0, 1
-    while True:
-        ids = entries_in_scope(conn, scope, limit=chunk, offset=offset)
-        if not ids:
-            break
-        datos = _entries_chunk(conn, ids)
-        offset += len(ids)
-        indice += 1
+    if chunk <= 0:
+        raise ValueError("El tamaño de cada trozo debe ser positivo")
+    with _transaction(conn):
+        cabecera = _header(conn, scope)
+        cursor = cabecera["cursor"]
         yield {
-            "version": SNAPSHOT_VERSION,
-            "cursor": cursor,
-            "chunk": indice,
+            **cabecera,
+            "chunk": 0,
             "final": False,
-            **datos,
+            "entries": [],
+            "state": [],
+            "entry_tags": [],
         }
-    yield {"version": SNAPSHOT_VERSION, "cursor": cursor, "chunk": indice, "final": True}
+        offset, indice = 0, 1
+        while True:
+            ids = entries_in_scope(
+                conn, scope, since=cabecera["generated_at"], limit=chunk, offset=offset,
+            )
+            if not ids:
+                break
+            yield {
+                "version": SNAPSHOT_VERSION,
+                "cursor": cursor,
+                "chunk": indice,
+                "final": False,
+                **_entries_chunk(conn, ids),
+            }
+            offset += len(ids)
+            indice += 1
+        yield {"version": SNAPSHOT_VERSION, "cursor": cursor, "chunk": indice, "final": True}
 
 
 def apply_snapshot(conn: sqlite3.Connection, snapshot: dict) -> int:
     """Escribe una foto en el cliente y coloca su cursor donde toca."""
     if snapshot.get("version", 1) > SNAPSHOT_VERSION:
         raise ValueError(f"snapshot de versión {snapshot['version']}: actualiza el cliente")
+    with _transaction(conn):
+        return _apply_snapshot(conn, snapshot)
+
+
+def _apply_snapshot(conn: sqlite3.Connection, snapshot: dict) -> int:
     n = 0
     n += _upsert(conn, "folders", snapshot.get("folders", []), ("id",))
     n += _upsert(conn, "feeds", snapshot.get("feeds", []), ("id",))
@@ -165,8 +219,11 @@ def apply_snapshot(conn: sqlite3.Connection, snapshot: dict) -> int:
     n += _upsert(conn, "entries", snapshot.get("entries", []), ("id",))
     n += _upsert(conn, "entry_state", snapshot.get("state", []), ("entry_id",))
     n += _upsert(conn, "entry_tags", snapshot.get("entry_tags", []), ("entry_id", "tag_id"))
+    _upsert(
+        conn, "field_clock", snapshot.get("field_clocks", []), ("entity", "entity_id", "field"),
+    )
 
-    if "cursor" in snapshot:
+    if "cursor" in snapshot and snapshot.get("final", True):
         conn.execute("UPDATE node SET last_pull_seq = ? WHERE id = 1", (snapshot["cursor"],))
     if lamport := snapshot.get("server_lamport"):
         conn.execute("UPDATE node SET lamport = MAX(lamport, ?) WHERE id = 1", (lamport,))
