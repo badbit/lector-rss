@@ -26,12 +26,12 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, fields
 from io import BytesIO
 from typing import Any
+from uuid import uuid4
 
 from bs4 import BeautifulSoup
 from ebooklib import epub as _epub
 
 from .. import repo
-from ..ids import new_id
 from ..models import Entry
 from ._render import asset, render
 from .html import ImageAsset, clean_article_html, count_words, fetch_images, text_from_html
@@ -253,7 +253,7 @@ def build_epub(
     hoy = date or dt.date.today()
 
     book = _epub.EpubBook()
-    book.set_identifier(identifier or f"urn:uuid:rsscore-{new_id()}")
+    book.set_identifier(identifier or uuid4().urn)
     book.set_title(title)
     book.set_language(language)
     book.add_author(author)

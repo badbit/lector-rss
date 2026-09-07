@@ -87,15 +87,28 @@ class HubClient {
     return (await _get('/sync/snapshot', params)) as Map<String, dynamic>;
   }
 
-  Future<({List<ChangeOp> ops, int cursor, bool hasMore})> pull(
+  Future<
+      ({
+        List<ChangeOp> ops,
+        int cursor,
+        bool hasMore,
+        List<Entry> entries,
+        List<ChangeOp> dependencies,
+        List<ChangeOp> entryOps,
+        int entriesCursor,
+        bool entriesHasMore,
+        int serverLamport
+      })> pull(
     String deviceId,
     int since, {
     int limit = 2000,
+    int entriesSince = 0,
   }) async {
     final json = (await _get('/sync/pull', {
       'since': since,
       'limit': limit,
       'device_id': deviceId,
+      'entries_since': entriesSince,
     })) as Map<String, dynamic>;
 
     final ops = (json['ops'] as List)
@@ -105,6 +118,18 @@ class HubClient {
       ops: ops,
       cursor: (json['cursor'] ?? since) as int,
       hasMore: json['has_more'] == true,
+      entries: ((json['entries'] ?? []) as List)
+          .map((e) => Entry.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      dependencies: ((json['dependencies'] ?? []) as List)
+          .map((e) => ChangeOp.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      entryOps: ((json['entry_ops'] ?? []) as List)
+          .map((e) => ChangeOp.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      entriesCursor: (json['entries_cursor'] ?? entriesSince) as int,
+      entriesHasMore: json['entries_has_more'] == true,
+      serverLamport: (json['server_lamport'] ?? 0) as int,
     );
   }
 
@@ -126,7 +151,8 @@ class HubClient {
   Future<Entry> entrada(String id) async =>
       Entry.fromJson((await _get('/entries/$id')) as Map<String, dynamic>);
 
-  Future<List<Entry>> entradas({int limit = 100, bool soloSinLeer = false}) async {
+  Future<List<Entry>> entradas(
+      {int limit = 100, bool soloSinLeer = false}) async {
     final json = (await _get('/entries', {
       'limit': limit,
       if (soloSinLeer) 'unread': true,

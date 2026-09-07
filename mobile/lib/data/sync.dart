@@ -23,7 +23,12 @@ const _camposPorEntidad = <String, Set<String>>{
   'entry_tag': {'deleted'},
   'tag': {'name', 'color', 'deleted'},
   'feed': {
-    'url', 'title', 'custom_title', 'folder_id', 'disabled', 'deleted',
+    'url',
+    'title',
+    'custom_title',
+    'folder_id',
+    'disabled',
+    'deleted',
     'source_kind',
   },
   'folder': {'name', 'parent_id', 'position', 'deleted'},
@@ -45,14 +50,21 @@ class SyncEngine {
     required this.repo,
     required this.client,
     this.scope = const SyncScope(),
-  });
+  }) : _executor = null;
+
+  SyncEngine._inTransaction(SyncEngine source, this._executor)
+      : app = source.app,
+        repo = source.repo,
+        client = source.client,
+        scope = source.scope;
 
   final AppDatabase app;
   final Repo repo;
   final HubClient client;
   final SyncScope scope;
 
-  Database get db => app.db;
+  final DatabaseExecutor? _executor;
+  DatabaseExecutor get db => _executor ?? app.db;
 
   // ==================================================================== ciclo
   Future<SyncStats> syncOnce({String nombre = 'móvil'}) async {
@@ -89,44 +101,74 @@ class SyncEngine {
   Future<void> _bootstrap(String deviceId) async {
     final foto = await client.snapshot(deviceId, days: scope.days);
 
-    await db.transaction((txn) async {
-      await _volcar(txn, 'folders', foto['folders'],
-          (j) => Folder.fromJson(j).toRow());
-      await _volcar(txn, 'feeds', foto['feeds'], (j) => Feed.fromJson(j).toRow());
-      await _volcar(txn, 'tags', foto['tags'], (j) => {
-            'id': j['id'],
-            'name': j['name'] ?? '',
-            'color': j['color'],
-            'deleted': _entero(j['deleted']),
-          });
-      await _volcar(txn, 'entries', foto['entries'], (j) => {
-            'id': j['id'],
-            'feed_id': j['feed_id'],
-            'url': j['url'],
-            'title': j['title'] ?? '',
-            'author': j['author'],
-            'summary': j['summary'],
-            'published_at': j['published_at'] ?? 0,
-            'has_body': 0,
-          });
-      await _volcar(txn, 'entry_state', foto['state'], (j) => {
-            'entry_id': j['entry_id'],
-            'read': _entero(j['read']),
-            'starred': _entero(j['starred']),
-            'read_at': j['read_at'],
-            'star_at': j['star_at'],
-          });
-      await _volcar(txn, 'entry_tags', foto['entry_tags'], (j) => {
-            'entry_id': j['entry_id'],
-            'tag_id': j['tag_id'],
-            'deleted': _entero(j['deleted']),
-          });
+    await app.db.transaction((txn) async {
+      await _volcar(
+          txn, 'folders', foto['folders'], (j) => Folder.fromJson(j).toRow());
+      await _volcar(
+          txn, 'feeds', foto['feeds'], (j) => Feed.fromJson(j).toRow());
+      await _volcar(
+          txn,
+          'tags',
+          foto['tags'],
+          (j) => {
+                'id': j['id'],
+                'name': j['name'] ?? '',
+                'color': j['color'],
+                'deleted': _entero(j['deleted']),
+              });
+      await _volcar(
+          txn,
+          'entries',
+          foto['entries'],
+          (j) => {
+                'id': j['id'],
+                'feed_id': j['feed_id'],
+                'url': j['url'],
+                'title': j['title'] ?? '',
+                'author': j['author'],
+                'summary': j['summary'],
+                'published_at': j['published_at'] ?? 0,
+                'has_body': 0,
+              });
+      await _volcar(
+          txn,
+          'entry_state',
+          foto['state'],
+          (j) => {
+                'entry_id': j['entry_id'],
+                'read': _entero(j['read']),
+                'starred': _entero(j['starred']),
+                'read_at': j['read_at'],
+                'star_at': j['star_at'],
+              });
+      await _volcar(
+          txn,
+          'entry_tags',
+          foto['entry_tags'],
+          (j) => {
+                'entry_id': j['entry_id'],
+                'tag_id': j['tag_id'],
+                'deleted': _entero(j['deleted']),
+              });
+      await _volcar(
+          txn,
+          'field_clock',
+          foto['field_clocks'],
+          (j) => {
+                'entity': j['entity'],
+                'entity_id': j['entity_id'],
+                'field': j['field'],
+                'lamport': j['lamport'],
+                'device_id': j['device_id'],
+              });
+      await txn
+          .rawUpdate('''UPDATE node SET last_pull_seq = ?, entries_cursor = ?,
+        lamport = MAX(lamport, ?) WHERE id = 1''', [
+        foto['cursor'] ?? 0,
+        foto['entries_cursor'] ?? 0,
+        foto['server_lamport'] ?? 0,
+      ]);
     });
-
-    await app.setCursor((foto['cursor'] ?? 0) as int);
-    if (foto['server_lamport'] != null) {
-      await app.observeLamport(foto['server_lamport'] as int);
-    }
   }
 
   Future<void> _volcar(
@@ -151,7 +193,8 @@ class SyncEngine {
       final lote = await repo.pendientesDeSubir();
       if (lote.isEmpty) break;
 
-      final respuesta = await client.push(deviceId, lote.map((e) => e.$2).toList());
+      final respuesta =
+          await client.push(deviceId, lote.map((e) => e.$2).toList());
       // Solo ahora, con el hub habiendo confirmado, se vacía la cola: si se
       // borrase antes, un corte de red perdería el cambio para siempre.
       await repo.limpiarOutbox(lote.map((e) => e.$1).toList());
@@ -168,17 +211,46 @@ class SyncEngine {
 
     while (true) {
       final desde = await app.cursor();
-      final respuesta = await client.pull(deviceId, desde);
+      final node = (await db.query('node', where: 'id = 1')).first;
+      final respuesta = await client.pull(deviceId, desde,
+          entriesSince: node['entries_cursor'] as int);
 
-      if (respuesta.ops.isNotEmpty) {
-        final r = await applyOps(respuesta.ops);
+      await app.db.transaction((txn) async {
+        final worker = SyncEngine._inTransaction(this, txn);
+        await worker.applyOps(respuesta.dependencies);
+        for (final entry in respuesta.entries) {
+          await txn.insert(
+              'entries',
+              {
+                'id': entry.id,
+                'feed_id': entry.feedId,
+                'url': entry.url,
+                'title': entry.title,
+                'author': entry.author,
+                'summary': entry.summary,
+                'published_at': entry.publishedAt,
+                'has_body': 0,
+              },
+              conflictAlgorithm: ConflictAlgorithm.ignore);
+          await txn.insert('entry_state', {'entry_id': entry.id},
+              conflictAlgorithm: ConflictAlgorithm.ignore);
+        }
+        final r =
+            await worker.applyOps([...respuesta.ops, ...respuesta.entryOps]);
         descargadas += respuesta.ops.length;
         aplicadas += r.applied;
         descartadas += r.ignored;
         aparcadas += r.pending;
-      }
-      await app.setCursor(respuesta.cursor);
-      if (!respuesta.hasMore) break;
+        await txn.rawUpdate(
+            '''UPDATE node SET last_pull_seq = MAX(last_pull_seq, ?),
+          entries_cursor = MAX(entries_cursor, ?), lamport = MAX(lamport, ?) WHERE id = 1''',
+            [
+              respuesta.cursor,
+              respuesta.entriesCursor,
+              respuesta.serverLamport
+            ]);
+      });
+      if (!respuesta.hasMore && !respuesta.entriesHasMore) break;
     }
     return (
       downloaded: descargadas,
@@ -194,7 +266,9 @@ class SyncEngine {
     var aplicadas = 0, descartadas = 0, aparcadas = 0;
 
     for (final op in ops) {
-      await app.observeLamport(op.lamport);
+      await db.rawUpdate(
+          'UPDATE node SET lamport = MAX(lamport, ?) + 1 WHERE id = 1',
+          [op.lamport]);
       final resultado = await _aplicarUna(op);
       switch (resultado) {
         case 'applied':
@@ -262,7 +336,8 @@ class SyncEngine {
   Future<void> _crearEsqueleto(String tabla, String id) async {
     switch (tabla) {
       case 'feeds':
-        await db.insert('feeds', {'id': id, 'url': 'urn:pendiente:$id', 'title': ''});
+        await db.insert(
+            'feeds', {'id': id, 'url': 'urn:pendiente:$id', 'title': ''});
       case 'folders':
         await db.insert('folders', {'id': id, 'name': ''});
       case 'tags':

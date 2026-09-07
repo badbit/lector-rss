@@ -34,9 +34,10 @@ una cola de cambios que sube cuando puede.
 | Cliente Android (Flutter): lectura sin conexión, sincronización, ámbito parcial | funcionando — guía en `docs/android.md` |
 
 La [revisión de desarrollo](docs/desarrollo.md) recoge las limitaciones verificadas
-y las siguientes prioridades. En particular, falta transferir a los clientes los
-artículos que llegan al hub después de su copia inicial y conectar el trabajador
-de exportaciones del escritorio con la cola remota.
+y las siguientes prioridades. Los clientes Python y Flutter ya reciben los
+artículos posteriores a su copia inicial. Sigue pendiente conectar el trabajador
+de exportaciones del escritorio con la cola remota y completar la recuperación
+cuando hay cambios locales sin subir.
 
 ## Instalación
 
@@ -112,6 +113,12 @@ Tres detalles que importan con un archivo permanente:
   guardados + no leídos) y el hub filtra el delta en el servidor.
 - **Compactación**: el diario se colapsa cada noche dejando la última operación
   de cada campo, nunca por encima del cursor del cliente más rezagado.
+
+Las altas de artículos tienen su propio cursor, independiente del diario de
+marcas. Cada página incorpora las suscripciones necesarias y el estado actual
+con sus relojes; los clientes confirman ambos cursores en la misma transacción.
+El [contrato incremental](docs/sincronizacion-incremental.md) explica la ampliación
+del protocolo y sus límites.
 
 ## Reglas
 

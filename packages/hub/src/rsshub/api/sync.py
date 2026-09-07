@@ -55,30 +55,40 @@ def _client_scope(conn, device_id: str) -> SyncScope | None:
 
 @router.get("/pull")
 def pull(
-    since: int = 0,
-    limit: int = Query(default=2000, le=10000),
+    since: int = Query(default=0, ge=0),
+    limit: int = Query(default=2000, ge=1, le=10000),
     device_id: str = "",
+    entries_since: int | None = Query(default=None, ge=0),
+    entries_limit: int = Query(default=500, ge=1, le=2000),
 ) -> PullResponse:
-    conn = db()
-    ops, cursor, has_more = repo.changes_since(conn, since, limit)
+    from rsscore.sync.entries import entry_delta
+    from rsscore.sync.snapshot import _transaction
 
-    # No devolvemos al emisor sus propias operaciones: ya las tiene aplicadas.
-    if device_id:
-        ops = [op for op in ops if op.device_id != device_id]
-        scope = _client_scope(conn, device_id)
-        if scope:
+    conn = db()
+    with _transaction(conn):
+        ops, cursor, has_more = repo.changes_since(conn, since, limit)
+        scope = _client_scope(conn, device_id) if device_id else None
+        if device_id:
+            ops = [op for op in ops if op.device_id != device_id]
+        if scope is not None:
             from rsscore.sync import filter_ops_for_scope
 
             ops = filter_ops_for_scope(conn, ops, scope)
+        extra = entry_delta(
+            conn, scope or SyncScope(), entries_since, entries_limit, ops,
+        ) if entries_since is not None else {}
+        lamport = conn.execute("SELECT lamport FROM node WHERE id = 1").fetchone()["lamport"]
 
     if device_id:
         with write_tx() as c:
             c.execute(
-                "UPDATE sync_clients SET last_seq = ?, last_seen_at = ? WHERE device_id = ?",
-                (cursor, now_ms(), device_id),
+                "UPDATE sync_clients SET last_seq = MAX(last_seq, ?), last_seen_at = ? "
+                "WHERE device_id = ?",
+                (since, now_ms(), device_id),
             )
-    lamport = conn.execute("SELECT lamport FROM node WHERE id = 1").fetchone()["lamport"]
-    return PullResponse(ops=ops, cursor=cursor, has_more=has_more, server_lamport=lamport)
+    return PullResponse(
+        ops=ops, cursor=cursor, has_more=has_more, server_lamport=lamport, **extra,
+    )
 
 
 @router.post("/push")

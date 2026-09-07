@@ -12,7 +12,7 @@ modelos de escritorio, exportadores y sincronización Dart. El código tiene una
 base útil, aunque varios recorridos entre componentes todavía están incompletos.
 El estado «funcionando» del README debe leerse junto con estas limitaciones.
 
-## Cambios de esta iteración
+## Primera iteración: arranque por snapshot
 
 Se corrigió el arranque por snapshot en el núcleo Python:
 
@@ -34,14 +34,14 @@ Se corrigió el arranque por snapshot en el núcleo Python:
 `field_clocks` es una ampliación aditiva de la versión 1 del snapshot. El cliente
 Python admite fotos anteriores sin ese campo, pero esas fotos no proporcionan
 la protección de conflictos que ofrecen los relojes exactos. El cambio no migra
-ni repara automáticamente copias ya existentes. El cliente Dart todavía debe
-incorporar la importación de estos relojes.
+ni repara automáticamente copias ya existentes. La importación de estos relojes
+en Dart se incorporó en la segunda iteración, descrita más abajo.
 
 También se ajustó la prueba opcional de EPUBCheck para ejecutar `java -jar` cuando
 el comando instalado es un enlace a un JAR. En este equipo su ejecución directa
 fallaba por el intérprete del sistema; la ejecución con Java validó la revista.
 
-## Verificación
+## Verificación de la primera iteración
 
 Se creó `.venv/` y se instalaron los tres paquetes Python en modo editable usando
 sus dependencias declaradas. Las comprobaciones se ejecutaron con bases temporales:
@@ -57,37 +57,66 @@ snapshot; Ruff sin incidencias. Ocho casos de las nuevas pruebas fallaban antes
 de la corrección. EPUBCheck terminó sin errores y con una advertencia sobre el
 identificador de la revista, que usa el prefijo `urn:uuid:` sin contener un UUID.
 
-No se compiló ni ejecutó Android: Flutter y el SDK de Android no estaban
+En la primera iteración no se compiló ni ejecutó Android: Flutter y su SDK no estaban
 disponibles en las rutas documentadas de este equipo. Las pruebas Qt existentes
 comprueban modelos en modo `offscreen`; falta una revisión interactiva de la
 ventana completa.
 
+## Segunda iteración: artículos nuevos y validación móvil
+
+Se completó la transferencia incremental de artículos en el hub y en los
+clientes Python y Dart. Se añadió un cursor de altas, separado del diario de
+lectura, con migraciones para el archivo existente y la base móvil. Las páginas
+incluyen sus dependencias y recuperan también artículos antiguos que vuelven a
+entrar en el ámbito por una estrella o una marca de no leído.
+
+La descarga combina los estados por reloj de campo, conserva los cuerpos
+cacheados y confirma datos y cursores en una transacción. Las pruebas incluyen
+marcas locales hechas durante la petición, páginas vacías por filtrado,
+dependencias repartidas entre páginas y reversión de una página inválida.
+El móvil importa ahora los relojes de la foto inicial y confirma foto, cursores
+y reloj conjuntamente.
+
+También se corrigieron la confirmación prematura de cursores en el hub y el
+identificador UUID del EPUB. El contrato OpenAPI se regeneró a partir del código.
+Detalles y límites en [sincronización incremental](sincronizacion-incremental.md).
+
+Verificación actual:
+
+- **135 pruebas Python aprobadas**, incluidas las de interfaz Qt en modo offscreen.
+- **16 pruebas Flutter aprobadas**, incluidas cinco nuevas de arranque,
+  migración, protocolo y recuperación de páginas.
+- Ruff y `flutter analyze` sin incidencias; mypy sin errores en los módulos de
+  cliente y transferencia incremental revisados; `pip check` sin dependencias rotas.
+- EPUBCheck validó la revista generada sin errores ni advertencias.
+- Se instaló temporalmente Flutter 3.35.6 en `/tmp` y se utilizó
+  `flutter pub get --enforce-lockfile`, sin modificar el archivo de dependencias.
+  El analizador utilizó `ANALYZER_STATE_LOCATION_OVERRIDE` para guardar su estado
+  en `/tmp`, ya que el directorio personal está restringido.
+
+No se construyó un APK ni se probó en teléfono o emulador: falta el SDK de Android.
+Las pruebas Flutter ejecutan el motor y SQLite en Linux. Estos resultados cubren
+los casos probados, no garantizan ausencia de errores en todos los recorridos.
+
 ## Siguientes prioridades
 
-1. **Transferencia incremental de artículos nuevos.** `repo.insert_entry` inserta
-   el artículo sin publicar su contenido o metadatos en el diario; `PullResponse`
-   solo transporta cambios de estado y estructura. Los clientes obtienen artículos
-   en el snapshot inicial, pero no incorporan los posteriores mediante el delta.
-   Se reprodujo por HTTP: después de añadir un segundo artículo al hub y volver a
-   sincronizar, el hub tenía dos y el cliente Python seguía teniendo uno. Hace
-   falta un protocolo paginado para esas altas, integrado en Python y Dart,
-   incluyendo artículos antiguos que entren posteriormente en el ámbito.
-2. **Arranque y recuperación con cambios locales.** Python y Dart aplican el
+1. **Arranque y recuperación con cambios locales.** Python y Dart aplican el
    snapshot antes de subir la cola local. Hay que cubrir la recuperación con
-   cambios sin subir y evitar que una foto los sobrescriba. En Dart también falta
-   importar `field_clocks` y confirmar foto, cursor y reloj en la misma transacción.
-3. **Cola remota de Obsidian.** El hub ofrece `/export/jobs/next` y
+   cambios sin subir y evitar que una foto los sobrescriba. También hay que
+   asociar los cursores a la identidad del hub y rescatar el archivo al ampliar
+   la ventana temporal, además de definir una política de retención local.
+2. **Cola remota de Obsidian.** El hub ofrece `/export/jobs/next` y
    `/export/jobs/finish`, pero `Backend.worker_exportaciones` consulta solamente
    su base local. Hace falta recoger y confirmar los trabajos remotos y obtener
    sus artículos y cuerpos antes de exportar.
-4. **Escritorio conectado al hub.** El refresco de `Backend` sigue usando un
+3. **Escritorio conectado al hub.** El refresco de `Backend` sigue usando un
    `Ingestor` local aunque haya hub configurado. Hay que definir y comprobar el
    funcionamiento independiente y el conectado para que el segundo delegue la
    descarga y recupere los cuerpos del servidor.
-5. **Funciones Android pendientes.** Tras cerrar la sincronización: exportación
+4. **Funciones Android pendientes.** Tras cerrar la sincronización: exportación
    desde el móvil, WorkManager, UnifiedPush y empaquetado F-Droid, conforme a
    [la guía Android](android.md).
-6. **Validación continua y empaquetado.** Incorporar CI para Python y Flutter,
-   verificar instalación de wheels y revisar el identificador EPUB señalado por
-   EPUBCheck. Las dependencias Python solo fijan versiones mínimas: conviene
+5. **Validación continua y empaquetado.** Incorporar CI para Python y Flutter,
+   verificar instalación de wheels y ejecutar una prueba de lectura y sincronización
+   en un dispositivo Android real. Las dependencias Python solo fijan versiones mínimas: conviene
    registrar un conjunto reproducible para despliegues.

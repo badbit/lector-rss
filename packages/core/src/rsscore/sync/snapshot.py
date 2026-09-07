@@ -14,6 +14,7 @@ from contextlib import contextmanager
 
 from ..ids import now_ms
 from ..models import SyncScope
+from .entries import arrival_cursor
 from .scope import entries_in_scope
 
 __all__ = ["apply_snapshot", "build_snapshot", "iter_snapshot_chunks"]
@@ -138,6 +139,7 @@ def _header(conn: sqlite3.Connection, scope: SyncScope) -> dict:
     return {
         "version": SNAPSHOT_VERSION,
         "cursor": _cursor(conn),
+        "entries_cursor": arrival_cursor(conn),
         "generated_at": now_ms(),
         "scope": scope.model_dump(),
         "server_lamport": conn.execute("SELECT lamport FROM node WHERE id = 1").fetchone()[
@@ -198,7 +200,10 @@ def iter_snapshot_chunks(
             }
             offset += len(ids)
             indice += 1
-        yield {"version": SNAPSHOT_VERSION, "cursor": cursor, "chunk": indice, "final": True}
+        yield {
+            "version": SNAPSHOT_VERSION, "cursor": cursor, "chunk": indice, "final": True,
+            "entries_cursor": cabecera["entries_cursor"],
+        }
 
 
 def apply_snapshot(conn: sqlite3.Connection, snapshot: dict) -> int:
@@ -225,6 +230,10 @@ def _apply_snapshot(conn: sqlite3.Connection, snapshot: dict) -> int:
 
     if "cursor" in snapshot and snapshot.get("final", True):
         conn.execute("UPDATE node SET last_pull_seq = ? WHERE id = 1", (snapshot["cursor"],))
+    if "entries_cursor" in snapshot and snapshot.get("final", True):
+        from ..db import set_setting
+
+        set_setting(conn, "sync_entries_cursor", str(snapshot["entries_cursor"]))
     if lamport := snapshot.get("server_lamport"):
         conn.execute("UPDATE node SET lamport = MAX(lamport, ?) WHERE id = 1", (lamport,))
     return n
