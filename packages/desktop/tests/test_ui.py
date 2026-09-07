@@ -105,3 +105,36 @@ def test_filtrar_por_carpeta_incluye_las_subcarpetas(app, conn):
     modelo.set_seleccion(EntrySelection(folder_ids=[carpeta.id], limit=500))
     # 3 del feed de Dev + 5 del feed de la subcarpeta Rust
     assert modelo.rowCount() == 8
+
+
+def test_dialogo_revista_responde_al_boton_y_conserva_opciones(app, conn):
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QDialog, QDialogButtonBox
+    from rsscore.config import MagazineConfig
+    from rsscore.rules.models import Rule
+    from rsscore.rules.store import save_rule
+    from rssdesk.digest import DigestDialog
+
+    rule = Rule(name="Lecturas", when={
+        "all": [{"field": "title", "op": "contains", "value": "RSS"}],
+    })
+    save_rule(conn, rule)
+    cfg = MagazineConfig(rules=[rule.name])
+    dialog = DigestDialog(conn, cfg)
+    dialog.show()
+    app.processEvents()
+    assert not dialog.send.isChecked(), "El envío requiere una elección explícita"
+    assert dialog.rules.item(0).checkState() == Qt.CheckState.Checked
+    dialog.mode.setCurrentIndex(1)
+    dialog.words.setValue(120)
+    dialog.limit.setValue(10)
+    QTest.mouseClick(dialog.buttons.button(QDialogButtonBox.StandardButton.Ok),
+                     Qt.MouseButton.LeftButton)
+    app.processEvents()
+    assert dialog.result() == QDialog.DialogCode.Accepted
+    options = dialog.options()
+    assert options.content_mode == "excerpt" and options.excerpt_words == 120
+    assert options.max_articles == 10 and options.rules == [rule.id]
+    assert cfg.content_mode == "full", "El diálogo no debe mutar la configuración guardada"
+    dialog.deleteLater()

@@ -7,13 +7,18 @@ un trabajo aquí y lo materializa el hub (Kindle, revista) o el escritorio
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from rsscore import repo
-from rsscore.models import EntrySelection, ExportJob, ExportKind
+from rsscore.config import data_home
+from rsscore.db import open_db
+from rsscore.ids import now_ms
+from rsscore.models import EntrySelection, ExportJob, ExportKind, ExportStatus
 
 from ..deps import bus, config, db, require_token, write_tx
 
@@ -35,6 +40,9 @@ class MagazineRequest(BaseModel):
     selection: EntrySelection
     title: str | None = None
     send_to_kindle: bool = False
+    rules: list[str] | None = None
+    content_mode: Literal["full", "excerpt"] | None = None
+    excerpt_words: int | None = Field(default=None, ge=30, le=1000)
 
 
 @router.post("/obsidian", status_code=202)
@@ -77,17 +85,52 @@ async def export_magazine(req: MagazineRequest) -> dict:
     mag_cfg = cfg.magazine.model_copy()
     if req.title:
         mag_cfg.title = req.title
-    conn = db()
-    result = build_magazine(conn, req.selection, mag_cfg)
-    path = getattr(result, "path", result)
-    out = {"fichero": str(path), "job": None}
+    for option in ("rules", "content_mode", "excerpt_words"):
+        value = getattr(req, option)
+        if value is not None:
+            setattr(mag_cfg, option, value)
+    if req.selection.limit <= 0 or req.selection.offset < 0:
+        raise HTTPException(422, "El límite debe ser positivo y el desplazamiento no negativo")
+    if req.send_to_kindle and (not cfg.smtp.host or not cfg.smtp.kindle_address):
+        raise HTTPException(400, "Falta configurar SMTP y la dirección @kindle.com")
+    job = ExportJob(
+        kind=ExportKind.MAGAZINE, target="hub", status=ExportStatus.RUNNING,
+        started_at=now_ms(), params=req.model_dump(mode="json"),
+    )
+    with write_tx() as conn:
+        repo.enqueue_export(conn, job)
+    directory = mag_cfg.output_dir or data_home() / "revistas"
+    destination = directory.expanduser() / f"revista-{job.id}.epub"
 
-    if req.send_to_kindle:
-        from rsscore.export.kindle import send_epub_file
+    def generate():
+        conn = open_db(cfg.db_path)
+        try:
+            return build_magazine(conn, req.selection, mag_cfg, out_path=destination)
+        finally:
+            conn.close()
 
-        await send_epub_file(Path(path), cfg.smtp, title=mag_cfg.title)
-        out["enviado_a_kindle"] = True
-    return out
+    result_data = {}
+    try:
+        result = await asyncio.to_thread(generate)
+        result_data = {"path": str(result.path), "articles": result.articles}
+        if req.send_to_kindle:
+            from rsscore.export.kindle import send_epub_file
+
+            await send_epub_file(result.path, cfg.smtp, title=mag_cfg.title)
+            result_data["sent_to_kindle"] = True
+    except Exception as exc:
+        with write_tx() as conn:
+            repo.finish_export(conn, job.id, result=result_data, error=str(exc))
+        raise HTTPException(400 if isinstance(exc, ValueError) else 502, {
+            "mensaje": str(exc), "job": job.id,
+        }) from exc
+    with write_tx() as conn:
+        repo.finish_export(conn, job.id, result=result_data)
+    return {
+        "fichero": result_data["path"], "job": job.id, "articulos": result.articles,
+        "download_url": f"/export/download/{job.id}",
+        "enviado_a_kindle": bool(result_data.get("sent_to_kindle")),
+    }
 
 
 @router.get("/jobs")
@@ -118,8 +161,7 @@ def finish_job(req: FinishRequest) -> dict:
 
 @router.get("/download/{job_id}")
 def download(job_id: str) -> FileResponse:
-    jobs = {j.id: j for j in repo.list_exports(db(), 200)}
-    job = jobs.get(job_id)
+    job = repo.get_export(db(), job_id)
     if not job or not job.result.get("path"):
         raise HTTPException(404, "Ese trabajo no ha producido ningún fichero")
     path = Path(job.result["path"])

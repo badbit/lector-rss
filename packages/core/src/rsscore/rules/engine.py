@@ -173,6 +173,17 @@ class RuleEngine:
                 salida.append((rule, acciones))
         return salida
 
+    def matching_conditions(
+        self, entry: Entry, feed: Feed, *, folder_names: Iterable[str] = (),
+        tag_names: Iterable[str] = (),
+    ) -> list[Rule]:
+        """Selección sin ejecutar acciones ni `stop`; admite reglas sin acciones."""
+        folders = frozenset(fold(n) for n in folder_names)
+        tags = frozenset(fold(n) for n in tag_names)
+        ctx = _Contexto(entry, feed)
+        return [r for r in self.rules
+                if self._in_scope(r.scope, feed, folders, tags) and self._grupo(r.when, ctx)]
+
     def evaluate_group(self, group: ConditionGroup, entry: Entry, feed: Feed) -> bool:
         """Un grupo vacío se cumple siempre: la regla cubre todo su ámbito."""
         return self._grupo(group, _Contexto(entry, feed))

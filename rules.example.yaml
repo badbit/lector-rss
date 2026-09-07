@@ -3,6 +3,16 @@
 # Se evalúan en orden al ingerir cada artículo nuevo. Las comparaciones ignoran
 # mayúsculas y acentos por defecto: «energia» encuentra «Energía».
 
+# Solo selecciona artículos para `rss digest --rule "Lecturas para Kindle"`.
+# No envía correos ni modifica las marcas al importar o ingerir.
+- id: lecturas-kindle
+  name: Lecturas para Kindle
+  when:
+    any:
+      - { field: any, op: contains, value: energía }
+      - { field: any, op: contains, value: astronomía }
+  then: []
+
 - name: Silenciar patrocinados
   # Va primero a propósito: `stop` corta la evaluación y evita que un
   # publirreportaje dispare las alertas de más abajo.

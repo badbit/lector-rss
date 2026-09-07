@@ -17,6 +17,7 @@ from ..models import Entry, ExportJob, ExportKind, Feed
 from ..notify import Notification, Priority
 from .engine import RuleEngine
 from .models import Action, ActionKind
+from .selection import rule_context
 
 log = logging.getLogger("rsscore.rules")
 
@@ -50,15 +51,8 @@ def apply_rules(
     """Evalúa las reglas sobre una entrada y materializa sus acciones."""
     outcome = RuleOutcome(entry_id=entry.id)
 
-    folder_names: list[str] = []
-    if feed.folder_id:
-        folder = repo.get_folder(conn, feed.folder_id)
-        if folder:
-            folder_names.append(folder.name)
-    tag_names = [t.name for t in repo.entry_tags(conn, entry.id)]
-
     for rule, acciones in engine.matching_rules(
-        entry, feed, folder_names=folder_names, tag_names=tag_names
+        entry, feed, **rule_context(conn, entry, feed)
     ):
         outcome.applied_rules.append(rule.name)
         for action in acciones:

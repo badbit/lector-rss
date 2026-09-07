@@ -88,6 +88,10 @@ async def _run_magazine(
     mag = cfg.magazine.model_copy()
     if titulo := job.params.get("title"):
         mag.title = titulo
+    for option in ("content_mode", "excerpt_words", "rules"):
+        if option in job.params:
+            setattr(mag, option, job.params[option])
+    mag = type(mag).model_validate(mag.model_dump())
     salida = job.params.get("out_path")
 
     resultado = await asyncio.to_thread(

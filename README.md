@@ -146,10 +146,26 @@ aviso agrupado, no cuarenta.
 - **Obsidian**: Markdown con frontmatter YAML. El escritorio escribe en la
   bóveda; desde el móvil la acción se encola en el hub y el escritorio la
   materializa al arrancar.
-- **Kindle**: se envía **EPUB**, no MOBI — Amazon retiró MOBI de Send-to-Kindle
-  en 2022. El remitente tiene que estar aprobado en Amazon.
+- **Kindle**: se envía EPUB, uno de los [formatos admitidos por Amazon](https://digprjsurvey.amazon.co.uk/csad/help/node/G5WYD9SAF7PGXRNA).
+  El remitente tiene que estar aprobado en Amazon. No se genera MOBI.
 - **Revista**: selección de artículos → EPUB 3 con secciones, TOC anidado y
   portada generada.
+
+Las revistas ahora permiten filtrar mediante reglas sin ejecutar sus acciones,
+y elegir artículos completos o extractos breves del texto disponible (sin IA).
+En el escritorio: **Exportar → Generar revista EPUB** (`Ctrl+M`). Por terminal:
+
+```bash
+rss digest --rule "Lecturas para Kindle" --days 7 --limit 30 --preview
+rss digest --rule "Lecturas para Kindle" --days 7 --limit 30 --brief --out ./revistas/
+# Añadir --send-to-kindle solamente cuando SMTP esté configurado.
+```
+
+La regla debe existir previamente; hay un ejemplo en `rules.example.yaml`.
+Consulta [reglas, revistas y Kindle](docs/reglas-y-kindle.md) para crearla,
+probarla por API, configurar el envío y conocer las diferencias pendientes
+respecto a Inoreader. Los extractos no son resúmenes redactados por IA y todavía
+no hay programación automática de revistas.
 
 ## Pruebas
 

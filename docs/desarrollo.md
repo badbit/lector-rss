@@ -81,7 +81,7 @@ También se corrigieron la confirmación prematura de cursores en el hub y el
 identificador UUID del EPUB. El contrato OpenAPI se regeneró a partir del código.
 Detalles y límites en [sincronización incremental](sincronizacion-incremental.md).
 
-Verificación actual:
+Verificación de la segunda iteración:
 
 - **135 pruebas Python aprobadas**, incluidas las de interfaz Qt en modo offscreen.
 - **16 pruebas Flutter aprobadas**, incluidas cinco nuevas de arranque,
@@ -97,6 +97,49 @@ Verificación actual:
 No se construyó un APK ni se probó en teléfono o emulador: falta el SDK de Android.
 Las pruebas Flutter ejecutan el motor y SQLite en Linux. Estos resultados cubren
 los casos probados, no garantizan ausencia de errores en todos los recorridos.
+
+## Tercera iteración: reglas y revistas para Kindle — 7 de septiembre de 2026
+
+Se conectaron las condiciones y ámbitos de reglas existentes con la selección
+de revistas, sin ejecutar sus acciones. El límite se aplica después del filtro
+y se recorren páginas cuando las primeras no contienen coincidencias. Se
+admiten reglas sin acciones; las referencias desconocidas o desactivadas fallan
+explícitamente. Carpetas ascendientes y etiquetas se resuelven por nombre o ID.
+
+La nueva CLI `rss digest` permite vista previa, reglas, carpetas, etiquetas,
+antigüedad y marcas. La revista admite contenido completo o extractos del texto
+fuente, conserva enlaces y no modifica el contenido almacenado. Se añadió un
+diálogo de escritorio con esas opciones y envío opcional. El formato sigue
+siendo EPUB; no se genera MOBI ni se realizan resúmenes con IA.
+
+El hub ofrece `POST /rules/preview` sin escrituras y amplía `/export/magazine`
+con filtros y extractos. Cada generación registra un trabajo descargable y una
+ruta única; si falla SMTP se conserva la ruta del EPUB en el trabajo con error.
+La generación utiliza una conexión propia en un hilo para no bloquear el bucle
+HTTP. OpenAPI se regeneró desde el código.
+
+Correcciones adicionales: los refrescos manuales y las altas del hub aplican
+reglas; seleccionar una carpeta vacía ya no devuelve todo el archivo; múltiples
+etiquetas no duplican entradas; los EPUB incluyen cuerpos que solo tienen texto
+plano. Las revistas generadas en una carpeta no sobrescriben ediciones previas.
+
+Verificación de esta iteración:
+
+- **163 pruebas Python aprobadas**, 28 más que al comenzar, incluidas ingesta
+  manual, paginación de reglas, previsualización sin efectos, correo simulado,
+  conservación tras fallo SMTP y un clic real sobre el botón del diálogo Qt.
+- Ruff, `git diff --check` y `pip check` sin incidencias.
+- EPUBCheck validó el EPUB de extractos sin errores ni advertencias; la batería
+  completa también ejecutó la prueba del EPUB convencional.
+- No se enviaron correos reales ni se comprobó un dispositivo Kindle. No hubo
+  cambios en Flutter ni se repitió su validación en esta iteración.
+
+Guía, ejemplos y comparación con Inoreader en [reglas y Kindle](reglas-y-kindle.md).
+Próximos pasos de este recorrido: editor visual de reglas, planificación de
+revistas con historial/reintentos y resúmenes redactados opcionales. El
+planificador de revistas existente todavía es un marcador; la respuesta SMTP
+no confirma la entrega final al Kindle. Tampoco se resuelven en esta iteración
+los pendientes de sincronización y ejecución remota descritos abajo.
 
 ## Siguientes prioridades
 
