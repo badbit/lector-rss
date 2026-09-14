@@ -56,6 +56,15 @@ rsshub                                      # arranca el hub
 rssdesk                                     # abre el escritorio
 ```
 
+El icono adapta el símbolo RSS de Lucide/Feather, y los íconos de la barra de
+herramientas y de los menús son de Lucide; sus licencias ISC/MIT están
+incluidas en `packages/desktop/src/rssdesk/assets/LICENSE-icons.txt`.
+
+En el escritorio, **Ver → Barra de herramientas** (o clic derecho sobre la
+barra) elige entre solo texto, texto e íconos o solo íconos; la elección se
+guarda en `desktop.toolbar_style`. Al pasar el ratón por un botón aparece qué
+hace y su atajo.
+
 ## Webs sin feed RSS
 
 Se puede seguir un sitio que no publica feed, de dos formas. Lo que sale de ahí

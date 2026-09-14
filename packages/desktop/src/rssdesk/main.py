@@ -11,12 +11,12 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
-import sys
+from html import escape
 from pathlib import Path
 
 import qasync
 from PySide6.QtCore import QModelIndex, Qt, QTimer, QUrl
-from PySide6.QtGui import QAction, QDesktopServices, QKeySequence
+from PySide6.QtGui import QAction, QActionGroup, QDesktopServices, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
     QHeaderView,
@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QSplitter,
     QStatusBar,
@@ -39,12 +40,20 @@ from rsscore.db import open_db
 from rsscore.models import EntrySelection
 
 from .article import ArticleView
+from .icons import action_icon, app_icon
 from .models import ROL_ID, ROL_TIPO, EntryListModel, FeedTreeModel
-from .settings import edit_settings
+from .settings import edit_settings, save_toolbar_style
 from .tasks import Backend
 from .tray import Tray
 
 log = logging.getLogger("rssdesk")
+
+# Valores de ``desktop.toolbar_style``: texto del menú y aspecto de los botones.
+ESTILOS_BARRA = {
+    "text": ("Solo &texto", Qt.ToolButtonStyle.ToolButtonTextOnly),
+    "text_and_icons": ("Texto &e íconos", Qt.ToolButtonStyle.ToolButtonTextBesideIcon),
+    "icons": ("Solo í&conos", Qt.ToolButtonStyle.ToolButtonIconOnly),
+}
 
 
 class MainWindow(QMainWindow):
@@ -57,6 +66,7 @@ class MainWindow(QMainWindow):
         self.stop = asyncio.Event()
         self._tareas: set[asyncio.Task] = set()
         self.setWindowTitle("Lector RSS")
+        self.setWindowIcon(app_icon())
         self.resize(1280, 820)
 
         self._construir_paneles()
@@ -116,7 +126,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(horizontal)
 
     def _construir_acciones(self) -> None:
-        barra = QToolBar("Principal")
+        barra = self.barra = QToolBar("Principal")
         barra.setMovable(False)
         self.addToolBar(barra)
         menu_archivo = self.menuBar().addMenu("&Archivo")
@@ -124,10 +134,21 @@ class MainWindow(QMainWindow):
         menu_ver = self.menuBar().addMenu("&Ver")
         menu_exportar = self.menuBar().addMenu("&Exportar")
 
-        def accion(texto, atajo, slot, *, en_barra=False, menu=None):
+        def accion(texto, atajo, slot, *, icono=None, ayuda=None, en_barra=False, menu=None):
             a = QAction(texto, self)
             if atajo:
                 a.setShortcut(QKeySequence(atajo))
+            if icono:
+                a.setIcon(action_icon(icono))
+            if ayuda:
+                # El tooltip nombra el botón aunque la barra sólo muestre íconos;
+                # en los menús, la misma ayuda sale en la barra de estado.
+                nombre = texto.replace("&", "").removesuffix("…")
+                if atajo:
+                    tecla = a.shortcut().toString(QKeySequence.SequenceFormat.NativeText)
+                    nombre += f" ({tecla})"
+                a.setToolTip(f"<b>{escape(nombre)}</b><br>{escape(ayuda)}")
+                a.setStatusTip(ayuda)
             a.triggered.connect(slot)
             self.addAction(a)
             if en_barra:
@@ -136,11 +157,21 @@ class MainWindow(QMainWindow):
                 menu.addAction(a)
             return a
 
-        accion("&Suscribirse…", "Ctrl+N", self._suscribirse, en_barra=True, menu=menu_archivo)
+        accion(
+            "&Suscribirse…",
+            "Ctrl+N",
+            self._suscribirse,
+            icono="circle-plus",
+            ayuda="Añade un feed a partir de su dirección o de la de su web",
+            en_barra=True,
+            menu=menu_archivo,
+        )
         accion(
             "&Actualizar todo",
             "F5",
             lambda: self._lanzar(self._refrescar(todos=True)),
+            icono="refresh-cw",
+            ayuda="Busca artículos nuevos en todas las suscripciones",
             en_barra=True,
             menu=menu_archivo,
         )
@@ -148,35 +179,146 @@ class MainWindow(QMainWindow):
             "&Sincronizar",
             "Ctrl+S",
             lambda: self._lanzar(self._sincronizar()),
+            icono="cloud-sync",
+            ayuda="Intercambia con el hub suscripciones, lecturas y guardados",
             en_barra=True,
             menu=menu_archivo,
         )
         menu_archivo.addSeparator()
-        accion("Importar OPML…", None, self._importar_opml, menu=menu_archivo)
-        accion("Exportar OPML…", None, self._exportar_opml, menu=menu_archivo)
-        accion("&Preferencias…", "Ctrl+,", self._preferencias, menu=menu_archivo)
+        accion(
+            "Importar OPML…",
+            None,
+            self._importar_opml,
+            icono="file-input",
+            ayuda="Añade las suscripciones de un archivo OPML",
+            menu=menu_archivo,
+        )
+        accion(
+            "Exportar OPML…",
+            None,
+            self._exportar_opml,
+            icono="file-output",
+            ayuda="Guarda todas las suscripciones en un archivo OPML",
+            menu=menu_archivo,
+        )
+        accion(
+            "&Preferencias…",
+            "Ctrl+,",
+            self._preferencias,
+            icono="settings",
+            ayuda="Nombre del dispositivo, conexión con el hub y modo de descarga",
+            menu=menu_archivo,
+        )
         menu_archivo.addSeparator()
-        accion("&Salir", "Ctrl+Q", self._salir, menu=menu_archivo)
+        accion(
+            "&Salir",
+            "Ctrl+Q",
+            self._salir,
+            icono="log-out",
+            ayuda="Cierra el lector; cerrar la ventana solo la esconde en la bandeja",
+            menu=menu_archivo,
+        )
 
         # Atajos de lectura, calcados de Liferea.
-        accion("Siguiente sin leer", "n", self._siguiente_sin_leer, menu=menu_ver)
+        accion(
+            "Siguiente sin leer",
+            "n",
+            self._siguiente_sin_leer,
+            icono="skip-forward",
+            ayuda="Salta al siguiente artículo sin leer de la lista",
+            menu=menu_ver,
+        )
         accion("Siguiente sin leer (j)", "j", self._siguiente_sin_leer)
-        accion("Avanzar", "Space", self._avanzar, menu=menu_ver)
-        accion("Alternar leído", "r", lambda: self._alternar("leido"), menu=menu_ver)
-        accion("Alternar guardado", "s", lambda: self._alternar("guardado"), menu=menu_ver)
-        accion("Marcar todo como leído", "Ctrl+A", self._marcar_todo_leido, menu=menu_ver)
-        accion("Abrir en el navegador", "Ctrl+O", self._abrir_en_navegador, menu=menu_ver)
-        accion("Buscar", "Ctrl+F", lambda: self.buscador.setFocus(), menu=menu_ver)
+        accion(
+            "Avanzar",
+            "Space",
+            self._avanzar,
+            icono="chevrons-down",
+            ayuda="Baja por el artículo y, al llegar al final, pasa al siguiente sin leer",
+            menu=menu_ver,
+        )
+        accion(
+            "Alternar leído",
+            "r",
+            lambda: self._alternar("leido"),
+            icono="mail-open",
+            ayuda="Marca los artículos seleccionados como leídos o sin leer",
+            menu=menu_ver,
+        )
+        accion(
+            "Alternar guardado",
+            "s",
+            lambda: self._alternar("guardado"),
+            icono="star",
+            ayuda="Guarda los artículos seleccionados o los quita de guardados",
+            menu=menu_ver,
+        )
+        accion(
+            "Marcar todo como leído",
+            "Ctrl+A",
+            self._marcar_todo_leido,
+            icono="check-check",
+            ayuda="Marca como leídos todos los artículos de la lista",
+            menu=menu_ver,
+        )
+        accion(
+            "Abrir en el navegador",
+            "Ctrl+O",
+            self._abrir_en_navegador,
+            icono="external-link",
+            ayuda="Abre el artículo actual en el navegador web",
+            menu=menu_ver,
+        )
+        accion(
+            "Buscar",
+            "Ctrl+F",
+            lambda: self.buscador.setFocus(),
+            icono="search",
+            ayuda="Busca en todo el archivo de artículos",
+            menu=menu_ver,
+        )
+        menu_ver.addSeparator()
+        self._construir_menu_barra(menu_ver)
 
-        accion("Nueva &carpeta…", None, self._nueva_carpeta, menu=menu_suscripciones)
-        accion("&Renombrar…", None, self._renombrar_seleccion, menu=menu_suscripciones)
-        accion("&Mover feed…", None, self._mover_feed, menu=menu_suscripciones)
-        accion("&Eliminar…", "Delete", self._eliminar_seleccion, menu=menu_suscripciones)
+        accion(
+            "Nueva &carpeta…",
+            None,
+            self._nueva_carpeta,
+            icono="folder-plus",
+            ayuda="Crea una carpeta para agrupar suscripciones",
+            menu=menu_suscripciones,
+        )
+        accion(
+            "&Renombrar…",
+            None,
+            self._renombrar_seleccion,
+            icono="pencil",
+            ayuda="Cambia el nombre de la carpeta o suscripción seleccionada",
+            menu=menu_suscripciones,
+        )
+        accion(
+            "&Mover feed…",
+            None,
+            self._mover_feed,
+            icono="folder-input",
+            ayuda="Lleva la suscripción seleccionada a otra carpeta",
+            menu=menu_suscripciones,
+        )
+        accion(
+            "&Eliminar…",
+            "Delete",
+            self._eliminar_seleccion,
+            icono="trash-2",
+            ayuda="Elimina la carpeta o suscripción seleccionada",
+            menu=menu_suscripciones,
+        )
 
         accion(
             "A &Obsidian",
             "Ctrl+E",
             lambda: self._lanzar(self._exportar_obsidian()),
+            icono="notebook-pen",
+            ayuda="Guarda los artículos seleccionados como notas en la bóveda de Obsidian",
             en_barra=True,
             menu=menu_exportar,
         )
@@ -184,6 +326,8 @@ class MainWindow(QMainWindow):
             "Al &Kindle",
             "Ctrl+K",
             lambda: self._lanzar(self._enviar_kindle()),
+            icono="tablet",
+            ayuda="Envía por correo los artículos seleccionados al Kindle",
             en_barra=True,
             menu=menu_exportar,
         )
@@ -191,6 +335,8 @@ class MainWindow(QMainWindow):
             "Generar &revista EPUB",
             "Ctrl+M",
             lambda: self._lanzar(self._revista()),
+            icono="newspaper",
+            ayuda="Reúne los artículos de la vista actual en una revista EPUB",
             en_barra=True,
             menu=menu_exportar,
         )
@@ -198,6 +344,39 @@ class MainWindow(QMainWindow):
         self.etiqueta_estado = QLabel("")
         barra.addSeparator()
         barra.addWidget(self.etiqueta_estado)
+
+    def _construir_menu_barra(self, menu_ver: QMenu) -> None:
+        """Ver → Barra de herramientas: solo texto, texto e íconos o solo íconos."""
+        submenu = menu_ver.addMenu(action_icon("panel-top"), "&Barra de herramientas")
+        self.estilos_barra = QActionGroup(self)
+        for clave, (texto, _estilo) in ESTILOS_BARRA.items():
+            opcion = self.estilos_barra.addAction(texto)
+            opcion.setCheckable(True)
+            opcion.setData(clave)
+            submenu.addAction(opcion)
+        self.estilos_barra.triggered.connect(self._elegir_estilo_barra)
+        self._aplicar_estilo_barra(self.cfg.desktop.toolbar_style)
+
+    def _aplicar_estilo_barra(self, estilo: str) -> None:
+        self.barra.setToolButtonStyle(ESTILOS_BARRA[estilo][1])
+        for opcion in self.estilos_barra.actions():
+            opcion.setChecked(opcion.data() == estilo)
+
+    def _elegir_estilo_barra(self, opcion: QAction) -> None:
+        estilo = opcion.data()
+        self._aplicar_estilo_barra(estilo)
+        self.cfg.desktop.toolbar_style = estilo
+        try:
+            save_toolbar_style(estilo, self.config_path)
+        except OSError as exc:
+            self.statusBar().showMessage(f"No se pudo guardar el aspecto de la barra: {exc}", 6000)
+
+    def createPopupMenu(self) -> QMenu:
+        """Clic derecho sobre la barra: las mismas opciones de aspecto que en Ver."""
+        menu = super().createPopupMenu()
+        menu.addSeparator()
+        menu.addActions(self.estilos_barra.actions())
+        return menu
 
     def _construir_bandeja(self) -> None:
         self.bandeja = Tray(self)
@@ -620,8 +799,10 @@ def main(argv: list[str] | None = None) -> int:
         cfg.db_path = Path(args.db)
     conn = open_db(cfg.db_path, device_name=cfg.device_name or "escritorio")
 
-    app = QApplication(sys.argv[:1])
+    app = QApplication(["rssdesk"])
     app.setApplicationName("Lector RSS")
+    app.setDesktopFileName("org.badbit.LectorRSS")
+    app.setWindowIcon(app_icon())
     app.setQuitOnLastWindowClosed(False)  # vive en la bandeja
 
     bucle = qasync.QEventLoop(app)

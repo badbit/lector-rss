@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from pathlib import Path
 
 import yaml
@@ -66,18 +67,39 @@ class SettingsDialog(QDialog):
 
 def save_client_settings(cfg: Config, path: Path) -> None:
     """Actualiza sólo las preferencias del cliente y conserva el resto del YAML."""
+
+    def update(data: dict) -> None:
+        data["device_name"] = cfg.device_name
+        data["hub_url"] = cfg.hub_url
+        data["hub_token"] = cfg.hub_token.get_secret_value()
+        _desktop_section(data)["fetch_locally"] = cfg.desktop.fetch_locally
+
+    _update_config_file(path, update)
+
+
+def save_toolbar_style(style: str, path: Path) -> None:
+    """Guarda el aspecto de la barra de herramientas y nada más.
+
+    No pasa por ``save_client_settings``: eso escribiría en el fichero el hub y el
+    token aunque en esta sesión vinieran de variables de entorno.
+    """
+    _update_config_file(path, lambda data: _desktop_section(data).update(toolbar_style=style))
+
+
+def _desktop_section(data: dict) -> dict:
+    desktop = data.setdefault("desktop", {})
+    if not isinstance(desktop, dict):
+        desktop = data["desktop"] = {}
+    return desktop
+
+
+def _update_config_file(path: Path, update: Callable[[dict], None]) -> None:
     data: dict = {}
     if path.exists():
         loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
         if isinstance(loaded, dict):
             data = loaded
-    data["device_name"] = cfg.device_name
-    data["hub_url"] = cfg.hub_url
-    data["hub_token"] = cfg.hub_token.get_secret_value()
-    desktop = data.setdefault("desktop", {})
-    if not isinstance(desktop, dict):
-        desktop = data["desktop"] = {}
-    desktop["fetch_locally"] = cfg.desktop.fetch_locally
+    update(data)
 
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.tmp")

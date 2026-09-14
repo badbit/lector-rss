@@ -30,6 +30,7 @@ hub_token: cambia-esto-por-un-token-largo-y-aleatorio
 # lector autónomo (sin hub) o para una instalación deliberadamente híbrida.
 desktop:
   fetch_locally: false
+  toolbar_style: text_and_icons  # text, text_and_icons o icons (Ver → Barra de herramientas)
 
 # ---------------------------------------------------------------- Obsidian
 obsidian:

@@ -11,10 +11,14 @@ from PySide6.QtCore import Signal
 from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
+from .icons import action_icon, app_icon
+
 
 def icono_con_contador(sin_leer: int) -> QIcon:
     """Icono generado al vuelo con el número de artículos sin leer."""
     tam = 64
+    if not sin_leer:
+        return app_icon()
     pixmap = QPixmap(tam, tam)
     pixmap.fill(QColor(0, 0, 0, 0))
     pintor = QPainter(pixmap)
@@ -44,11 +48,11 @@ class Tray(QSystemTrayIcon):
         self.setToolTip("Lector RSS")
 
         menu = QMenu()
-        accion_abrir = QAction("Mostrar la ventana", menu)
+        accion_abrir = QAction(action_icon("app-window"), "Mostrar la ventana", menu)
         accion_abrir.triggered.connect(self.mostrar_ventana.emit)
-        accion_refrescar = QAction("Actualizar ahora", menu)
+        accion_refrescar = QAction(action_icon("refresh-cw"), "Actualizar ahora", menu)
         accion_refrescar.triggered.connect(self.refrescar.emit)
-        accion_salir = QAction("Salir", menu)
+        accion_salir = QAction(action_icon("log-out"), "Salir", menu)
         accion_salir.triggered.connect(self.salir.emit)
         menu.addAction(accion_abrir)
         menu.addAction(accion_refrescar)

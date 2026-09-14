@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Literal
 
 import yaml
 from pydantic import BaseModel, Field, SecretStr
@@ -74,10 +75,12 @@ class DesktopConfig(BaseModel):
 
     Con un hub configurado, éste es la fuente de verdad y descarga los feeds.
     ``fetch_locally`` permite conservar un modo autónomo explícito para quien no
-    quiera desplegar el servicio.
+    quiera desplegar el servicio. ``toolbar_style`` elige el aspecto de los
+    botones de la barra: sólo texto, texto con ícono o sólo íconos.
     """
 
     fetch_locally: bool | None = None
+    toolbar_style: Literal["text", "text_and_icons", "icons"] = "text_and_icons"
 
 
 class Config(BaseModel):
