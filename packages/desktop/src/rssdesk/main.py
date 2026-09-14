@@ -420,6 +420,13 @@ class MainWindow(QMainWindow):
                     seleccion.unread_only = True
                 elif ident == "guardados":
                     seleccion.starred_only = True
+            case "inteligente":
+                from rsscore.rules.smart import list_saved_searches, saved_search_to_selection
+
+                vista = next((v for v in list_saved_searches(self.conn) if v.id == ident), None)
+                if vista is None:
+                    return
+                seleccion = saved_search_to_selection(self.conn, vista)
             case _:
                 return
         self.buscador.clear()

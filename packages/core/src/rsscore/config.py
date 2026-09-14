@@ -7,6 +7,7 @@ ambos y no haya dos formas de configurar lo mismo.
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 from typing import Literal
 
@@ -84,7 +85,7 @@ class DesktopConfig(BaseModel):
 
 
 class Config(BaseModel):
-    db_path: Path = Path("data/rss.db")
+    db_path: Path = Field(default_factory=lambda: data_home() / "rss.db")
     device_name: str = ""
     fetch: FetchConfig = Field(default_factory=FetchConfig)
     smtp: SmtpConfig = Field(default_factory=SmtpConfig)
@@ -110,6 +111,9 @@ class Config(BaseModel):
         if path.exists():
             data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         cfg = cls.model_validate(data)
+        if "db_path" not in data and Path("data/rss.db").is_file():
+            # Compatibilidad con el valor por omisión anterior. No mover datos.
+            cfg.db_path = Path("data/rss.db").resolve()
         if env_db := os.environ.get("RSS_DB"):
             cfg.db_path = Path(env_db)
         if env_hub := os.environ.get("RSS_HUB_URL"):
@@ -121,11 +125,19 @@ class Config(BaseModel):
 
 
 def config_home() -> Path:
+    if sys.platform == "darwin" and not os.environ.get("XDG_CONFIG_HOME"):
+        # Conserva las instalaciones que ya usaban la ruta XDG en un Mac.
+        legacy = Path.home() / ".config" / "rss"
+        if (legacy / "config.yaml").exists():
+            return legacy
+        return Path.home() / "Library" / "Application Support" / "rss"
     base = os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config")
     return Path(base) / "rss"
 
 
 def data_home() -> Path:
+    if sys.platform == "darwin" and not os.environ.get("XDG_DATA_HOME"):
+        return Path.home() / "Library" / "Application Support" / "rss"
     base = os.environ.get("XDG_DATA_HOME") or (Path.home() / ".local" / "share")
     return Path(base) / "rss"
 

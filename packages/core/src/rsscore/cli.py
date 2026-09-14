@@ -8,9 +8,14 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
+import sqlite3
 import sys
+from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
+
+import httpx
 
 from . import repo
 from .config import Config
@@ -25,13 +30,16 @@ def _fecha(ms: int) -> str:
 def _conn(args):
     cfg = Config.load(getattr(args, "config", None))
     if getattr(args, "db", None):
-        cfg.db_path = Path(args.db)
-    return open_db(cfg.db_path, device_name=cfg.device_name), cfg
+        cfg.db_path = Path(args.db).expanduser()
+    conn = open_db(cfg.db_path, device_name=cfg.device_name)
+    if hasattr(args, "_connections"):
+        args._connections.append(conn)
+    return conn, cfg
 
 
 # ------------------------------------------------------------------ órdenes
 def cmd_add(args) -> int:
-    from .ingest import Ingestor
+    from .reader import subscribe
 
     conn, cfg = _conn(args)
     folder_id = None
@@ -45,7 +53,7 @@ def cmd_add(args) -> int:
     from .ingest import NoFeedFound
 
     try:
-        feed = asyncio.run(Ingestor(conn, cfg).add_by_url(args.url, folder_id=folder_id))
+        title = asyncio.run(subscribe(conn, cfg, args.url, folder_id))
     except NoFeedFound as exc:
         print(f"{args.url} no publica ningún feed.", file=sys.stderr)
         if exc.candidates:
@@ -61,8 +69,7 @@ def cmd_add(args) -> int:
         else:
             print(f"  Para vigilar los cambios:  rss watch {args.url}", file=sys.stderr)
         return 1
-    print(f"Añadido: {feed.display_title}  [{feed.id}]")
-    print(f"  {feed.url}")
+    print(f"Añadido: {title}")
     return 0
 
 
@@ -194,6 +201,11 @@ def cmd_list(args) -> int:
     counts = repo.unread_counts(conn)
     folders = {f.id: f.name for f in repo.list_folders(conn)}
     feeds = repo.list_feeds(conn)
+    if args.json:
+        print(json.dumps([
+            {**f.model_dump(mode="json"), "unread": counts.get(f.id, 0)} for f in feeds
+        ], ensure_ascii=False))
+        return 0
     if not feeds:
         print("No hay ningún feed. Añade uno con:  rss add <url>")
         return 0
@@ -202,62 +214,24 @@ def cmd_list(args) -> int:
         marca = f"({n})" if n else "   "
         carpeta = f"[{folders.get(f.folder_id, '')}] " if f.folder_id else ""
         error = "  ⚠ " + f.last_error[:40] if f.last_error else ""
-        print(f"{marca:>6} {carpeta}{f.display_title}{error}")
+        print(f"{marca:>6} {carpeta}{f.display_title}{error}  [{f.id}]")
     total = sum(counts.values())
     print(f"\n{len(feeds)} feeds, {total} sin leer")
     return 0
 
 
 def cmd_refresh(args) -> int:
-    from .ingest import Ingestor
+    from .reader import refresh
 
     conn, cfg = _conn(args)
-    ingestor = Ingestor(conn, cfg, on_new_entry=_rules_hook(conn, cfg))
+    feed = None
     if args.feed:
         feed = repo.get_feed(conn, args.feed) or repo.feed_by_url(conn, args.feed)
         if not feed:
             print(f"No encuentro el feed: {args.feed}", file=sys.stderr)
             return 1
-        results = [asyncio.run(ingestor.refresh_feed(feed))]
-    elif args.all:
-        feeds = repo.list_feeds(conn)
-        results = asyncio.run(_refresh_many(ingestor, feeds))
-    else:
-        results = asyncio.run(ingestor.refresh_due())
-    nuevas = sum(len(r.new_entries) for r in results)
-    errores = [r for r in results if r.status == "error"]
-    print(f"{len(results)} feeds refrescados, {nuevas} entradas nuevas, {len(errores)} con error")
-    for r in errores[:10]:
-        print(f"  ⚠ {r.feed_id}: {r.error}")
+    print(asyncio.run(refresh(conn, cfg, feed=feed, force=args.all)))
     return 0
-
-
-async def _refresh_many(ingestor, feeds):
-    out = []
-    for feed in feeds:
-        out.append(await ingestor.refresh_feed(feed))
-    return out
-
-
-def _rules_hook(conn, cfg):
-    try:
-        from .rules.apply import apply_rules
-        from .rules.engine import RuleEngine
-        from .rules.store import load_rules
-    except ImportError:
-        return None
-    rules = load_rules(conn)
-    if not rules:
-        return None
-    engine = RuleEngine(rules)
-
-    def hook(c, entry, feed):
-        try:
-            apply_rules(c, entry, feed, engine)
-        except Exception as exc:  # una regla rota no puede parar la ingesta
-            print(f"  ⚠ regla falló en «{entry.title[:40]}»: {exc}", file=sys.stderr)
-
-    return hook
 
 
 def cmd_unread(args) -> int:
@@ -265,14 +239,73 @@ def cmd_unread(args) -> int:
     sel = EntrySelection(unread_only=True, limit=args.limit)
     if args.feed:
         sel.feed_ids = [args.feed]
-    feeds = {f.id: f.display_title for f in repo.list_feeds(conn)}
-    for e in repo.select_entries(conn, sel):
-        print(f"{_fecha(e.published_at)}  {feeds.get(e.feed_id, '?')[:22]:22}  {e.title}")
-        print(f"{'':24}{e.id}")
+    _print_entries(conn, repo.select_entries(conn, sel), args.json)
     return 0
 
 
+def _print_entries(conn, entries, as_json: bool) -> None:
+    from .reader import terminal_text
+
+    if as_json:
+        rows = []
+        for entry in entries:
+            state = repo.get_state(conn, entry.id)
+            rows.append({**entry.model_dump(mode="json"),
+                         "state": state.model_dump(mode="json") if state else None})
+        print(json.dumps(rows, ensure_ascii=False))
+        return
+    feeds = {f.id: f.display_title for f in repo.list_feeds(conn)}
+    for e in entries:
+        print(terminal_text(
+            f"{_fecha(e.published_at)}  {feeds.get(e.feed_id, '?')[:22]:22}  {e.title}"
+        ))
+        print(f"{'':24}{e.id}")
+
+
+def cmd_entries(args) -> int:
+    conn, _ = _conn(args)
+    selection = EntrySelection(
+        feed_ids=[args.feed] if args.feed else [], query=args.query,
+        unread_only=args.unread, starred_only=args.starred,
+        limit=args.limit, offset=args.offset,
+    )
+    _print_entries(conn, repo.select_entries(conn, selection), args.json)
+    return 0
+
+
+def cmd_show(args) -> int:
+    from .reader import article_text, load_article, terminal_text
+
+    conn, cfg = _conn(args)
+    entry = asyncio.run(load_article(conn, cfg, args.id, offline=args.offline))
+    if args.mark_read:
+        repo.set_read(conn, [entry.id], True)
+    if args.json:
+        print(json.dumps({**entry.model_dump(mode="json"), "text": article_text(entry)},
+                         ensure_ascii=False))
+    else:
+        print(terminal_text(f"{entry.title}\n{entry.url or ''}\n"))
+        print(article_text(entry))
+        if not (entry.body_html or entry.body_text):
+            print("Solo hay un resumen disponible.", file=sys.stderr)
+    return 0
+
+
+def cmd_tui(args) -> int:
+    from .tui import run
+
+    # Rechaza pipes antes de abrir o crear la base.
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        raise ValueError("rss tui necesita un terminal interactivo; usa rss entries o rss show")
+    conn, cfg = _conn(args)
+    return run(conn, cfg)
+
+
 def cmd_read(args) -> int:
+    if args.feed and (args.ids or args.unread):
+        raise ValueError("--feed no se puede combinar con IDs ni con --unread")
+    if not args.feed and not args.ids:
+        raise ValueError("Indica los IDs o --feed")
     conn, _ = _conn(args)
     if args.feed:
         n = repo.mark_feed_read(conn, args.feed)
@@ -291,11 +324,10 @@ def cmd_star(args) -> int:
 
 def cmd_search(args) -> int:
     conn, _ = _conn(args)
-    feeds = {f.id: f.display_title for f in repo.list_feeds(conn)}
     results = repo.search(conn, args.query, args.limit)
-    for e in results:
-        print(f"{_fecha(e.published_at)}  {feeds.get(e.feed_id, '?')[:22]:22}  {e.title}")
-    print(f"\n{len(results)} resultados")
+    _print_entries(conn, results, args.json)
+    if not args.json:
+        print(f"\n{len(results)} resultados")
     return 0
 
 
@@ -317,16 +349,71 @@ def cmd_opml(args) -> int:
     return 0
 
 
+def cmd_import_inoreader(args) -> int:
+    from .db import ensure_node, migrate
+    from .ids import new_id
+    from .inoreader import import_archive, read_archive
+
+    archive = read_archive(args.file)
+    cfg = Config.load(args.config)
+    db_path = Path(args.db).expanduser() if args.db else cfg.db_path
+    if args.apply and cfg.hub_url:
+        raise ValueError(
+            "Importa en la base del hub usando su configuración; "
+            "el cliente no sube cuerpos de artículos al servidor"
+        )
+    # Previsualización sobre una copia coherente en memoria, también con WAL.
+    with closing(open_db(":memory:")) as preview:
+        if db_path.exists():
+            with closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True)) as src:
+                src.backup(preview)
+            migrate(preview)
+            ensure_node(preview, cfg.device_name)
+        report = import_archive(preview, archive)
+    backup = None
+    if args.apply:
+        if db_path.exists():
+            backup = db_path.parent / "backups" / f"before-inoreader-{new_id()}.db"
+            backup.parent.mkdir(parents=True, exist_ok=True)
+            with (
+                closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True)) as src,
+                closing(sqlite3.connect(backup)) as dst,
+            ):
+                src.backup(dst)
+                if dst.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+                    raise ValueError("La copia de seguridad no supera la comprobación")
+        with closing(open_db(db_path, device_name=cfg.device_name)) as conn:
+            report = import_archive(conn, archive)
+    result = {"applied": args.apply, "database": str(db_path),
+              "archive_sha256": archive.sha256, "backup": str(backup) if backup else None,
+              **report.as_dict()}
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False))
+    else:
+        print("Importación completada" if args.apply else "Previsualización: base sin modificar")
+        print(f"{report.feeds_new} fuentes nuevas, {report.folders_new} carpetas nuevas")
+        print(f"{report.entries_new} artículos nuevos, {report.entries_linked} vinculados, "
+              f"{report.entries_skipped} omitidos o ya importados")
+        print(f"{report.views_created} vistas creadas para carpetas compartidas")
+        if backup:
+            print(f"Copia de seguridad: {backup}")
+        for warning in report.warnings:
+            print(f"Aviso: {warning}")
+        if not args.apply:
+            print("Añade --apply para importar con copia de seguridad automática.")
+    return 0
+
+
 def cmd_sync(args) -> int:
-    from .sync import SyncClient
+    from .reader import sync
 
     conn, cfg = _conn(args)
     hub = args.hub or cfg.hub_url
     if not hub:
         print("Falta la URL del hub (--hub o hub_url en la configuración)", file=sys.stderr)
         return 1
-    token = cfg.hub_token.get_secret_value()
-    stats = asyncio.run(SyncClient(conn, hub, token).sync_once())
+    cfg.hub_url = hub
+    stats = asyncio.run(sync(conn, cfg))
     print(f"Sincronizado: {stats}")
     return 0
 
@@ -435,6 +522,20 @@ def cmd_stats(args) -> int:
 
 
 # -------------------------------------------------------------------- parser
+def _positive(value: str) -> int:
+    number = int(value)
+    if number < 1:
+        raise argparse.ArgumentTypeError("debe ser mayor que cero")
+    return number
+
+
+def _nonnegative(value: str) -> int:
+    number = int(value)
+    if number < 0:
+        raise argparse.ArgumentTypeError("no puede ser negativo")
+    return number
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="rss", description="Lector RSS: administración por consola")
     p.add_argument("--config", help="ruta al config.yaml")
@@ -467,6 +568,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.set_defaults(func=cmd_watch)
 
     s = sub.add_parser("list", help="listar suscripciones")
+    s.add_argument("--json", action="store_true", help="salida JSON para scripts")
     s.set_defaults(func=cmd_list)
 
     s = sub.add_parser("refresh", help="descargar novedades")
@@ -476,8 +578,29 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("unread", help="listar artículos sin leer")
     s.add_argument("--feed")
-    s.add_argument("-n", "--limit", type=int, default=30)
+    s.add_argument("-n", "--limit", type=_positive, default=30)
+    s.add_argument("--json", action="store_true")
     s.set_defaults(func=cmd_unread)
+
+    s = sub.add_parser("entries", help="listar el archivo con filtros y paginación")
+    s.add_argument("--feed", help="ID del feed")
+    s.add_argument("--query", help="consulta FTS5")
+    s.add_argument("--unread", action="store_true")
+    s.add_argument("--starred", action="store_true")
+    s.add_argument("-n", "--limit", type=_positive, default=30)
+    s.add_argument("--offset", type=_nonnegative, default=0)
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(func=cmd_entries)
+
+    s = sub.add_parser("show", help="leer un artículo como texto, sin abrir navegador")
+    s.add_argument("id", help="ID obtenido con entries, unread o search")
+    s.add_argument("--offline", action="store_true", help="usar únicamente el contenido local")
+    s.add_argument("--mark-read", action="store_true", help="marcar leído al mostrarlo")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(func=cmd_show)
+
+    s = sub.add_parser("tui", help="abrir la interfaz textual interactiva (curses)")
+    s.set_defaults(func=cmd_tui)
 
     s = sub.add_parser("read", help="marcar como leído")
     s.add_argument("ids", nargs="*")
@@ -492,13 +615,22 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("search", help="búsqueda full-text")
     s.add_argument("query")
-    s.add_argument("-n", "--limit", type=int, default=30)
+    s.add_argument("-n", "--limit", type=_positive, default=30)
+    s.add_argument("--json", action="store_true")
     s.set_defaults(func=cmd_search)
 
     s = sub.add_parser("opml", help="importar/exportar suscripciones")
     s.add_argument("action", choices=["import", "export"])
     s.add_argument("file", nargs="?")
     s.set_defaults(func=cmd_opml)
+
+    s = sub.add_parser("import-inoreader", help="importar ZIP de Inoreader (previsualiza primero)")
+    s.add_argument("file", help="exportación ZIP")
+    mode = s.add_mutually_exclusive_group()
+    mode.add_argument("--apply", action="store_true", help="importar con copia de seguridad previa")
+    mode.add_argument("--dry-run", action="store_true", help="solo previsualizar (predeterminado)")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(func=cmd_import_inoreader)
 
     s = sub.add_parser("sync", help="sincronizar con el hub")
     s.add_argument("--hub", help="URL del hub")
@@ -527,6 +659,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    args._connections = []
     try:
         return args.func(args)
     except KeyboardInterrupt:
@@ -534,6 +667,14 @@ def main(argv: list[str] | None = None) -> int:
     except ImportError as exc:
         print(f"Módulo aún no disponible: {exc}", file=sys.stderr)
         return 2
+    except (ValueError, OSError, sqlite3.Error, httpx.HTTPError) as exc:
+        from .reader import terminal_text
+
+        print(terminal_text(f"Error: {exc}"), file=sys.stderr)
+        return 1
+    finally:
+        for conn in args._connections:
+            conn.close()
 
 
 if __name__ == "__main__":

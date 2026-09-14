@@ -15,6 +15,7 @@ from PySide6.QtCore import QAbstractItemModel, QAbstractTableModel, QModelIndex,
 from PySide6.QtGui import QFont
 from rsscore import repo
 from rsscore.models import Entry, EntrySelection
+from rsscore.rules.smart import list_saved_searches
 
 PAGINA = 200
 
@@ -88,6 +89,12 @@ class FeedTreeModel(QAbstractItemModel):
             padre.hijos.append(nodo)
 
         self._propagar(self.raiz)
+        vistas = list_saved_searches(self.conn)
+        if vistas:
+            grupo = NodoArbol("grupo", "__inteligentes", "Carpetas inteligentes", self.raiz)
+            self.raiz.hijos.append(grupo)
+            for vista in vistas:
+                grupo.hijos.append(NodoArbol("inteligente", vista.id, vista.name, grupo))
         self.endResetModel()
 
     def _guardados(self) -> int:

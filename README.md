@@ -1,6 +1,7 @@
 # Lector RSS multiplataforma
 
-Lector de noticias para escritorio Linux y Android con estado sincronizado entre
+Lector de noticias para escritorio Linux, terminal y Android, con preparación
+para macOS y estado sincronizado entre
 dispositivos, sin necesidad de leer en un navegador, y con exportación a
 Obsidian, Kindle y revistas EPUB.
 
@@ -8,6 +9,7 @@ Obsidian, Kindle y revistas EPUB.
 
 ```
 Escritorio (PySide6) ─┐
+Terminal (CLI/TUI) ───┤
                       ├─► HUB headless (FastAPI, JSON + SSE) ─► SMTP → Kindle
 Android (Flutter)  ───┘        SQLite WAL + FTS5              └─► ntfy → avisos
 ```
@@ -29,17 +31,27 @@ una cola de cambios que sube cuando puede.
 | Hub: API JSON + SSE, planificador, tokens | funcionando |
 | Reglas, alertas, ntfy, carpetas inteligentes | funcionando |
 | CLI `rss` | funcionando |
+| TUI `rss tui` (curses, solo teclado) | implementada: lectura, búsqueda, estados, refresco y sincronización |
+| macOS | rutas e instalación preparadas; validación nativa pendiente, guía en `docs/macos.md` |
 | Escritorio PySide6 (3 paneles, bandeja, atajos) | funcionando |
 | Exportadores (Obsidian, Kindle, revista EPUB) | funcionando |
+| Importación ZIP de Inoreader | previsualización, respaldo, guardados y procedencia original |
 | Cliente Android (Flutter): lectura sin conexión, sincronización, ámbito parcial | funcionando — guía en `docs/android.md` |
 
 ## Instalación
 
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install -e packages/core[dev] -e packages/hub -e packages/desktop
-cp config.example.yaml ~/.config/rss/config.yaml   # y edítalo
+python3.12 -m venv .venv
+.venv/bin/pip install -e './packages/core[dev]' -e ./packages/hub -e ./packages/desktop
+source .venv/bin/activate
 ```
+
+Requiere Python 3.12 o posterior. Para usar exclusivamente CLI/TUI basta instalar
+`-e ./packages/core`: no necesita Qt, servidor gráfico ni el paquete del hub.
+Puede arrancar sin configuración; en Linux guarda los datos en
+`~/.local/share/rss/rss.db`. Para personalizarla, crea `~/.config/rss/` y copia
+allí `config.example.yaml` como `config.yaml`, sin sobrescribir una configuración
+existente. La instalación en Mac se explica en [docs/macos.md](docs/macos.md).
 
 ## Uso rápido
 
@@ -49,6 +61,9 @@ rss add https://blog.rust-lang.org/ -f Dev # descubre el feed solo
 rss refresh                                 # descarga lo que toque
 rss unread -n 20
 rss search "kernel AND seguridad"           # sintaxis FTS5
+rss entries --starred --json                 # archivo y estados para scripts
+rss show ID --offline                        # artículo en texto, sin navegador
+rss tui                                     # interfaz textual interactiva
 rss opml import suscripciones.opml
 rss stats
 
@@ -56,6 +71,15 @@ rsshub                                      # arranca el hub
 rssdesk                                     # abre el escritorio
 ```
 
+Para añadir un icono y un acceso al menú de MATE (también compatible con otros
+menús freedesktop), ejecuta desde este repositorio:
+
+```bash
+.venv/bin/python deploy/install_menu.py --apply
+```
+
+El acceso aparece como **Internet → Lector RSS** y usa el Python del entorno
+actual. Si mueves el repositorio o cambias de entorno, repite el instalador.
 El icono adapta el símbolo RSS de Lucide/Feather, y los íconos de la barra de
 herramientas y de los menús son de Lucide; sus licencias ISC/MIT están
 incluidas en `packages/desktop/src/rssdesk/assets/LICENSE-icons.txt`.
@@ -64,6 +88,77 @@ En el escritorio, **Ver → Barra de herramientas** (o clic derecho sobre la
 barra) elige entre solo texto, texto e íconos o solo íconos; la elección se
 guarda en `desktop.toolbar_style`. Al pasar el ratón por un botón aparece qué
 hace y su atajo.
+
+`rss show ID` descarga el cuerpo desde el hub si falta; `--offline` usa solo lo
+local. Consultar no cambia el estado: añade `--mark-read` para marcarlo leído.
+Los IDs aparecen en `list`, `entries`, `unread` y `search`; estos comandos
+admiten `--json`. Las opciones globales van antes del comando:
+`rss --db /ruta/rss.db tui`.
+
+### Interfaz de terminal
+
+`rss tui` muestra fuentes y artículos; Enter abre el texto completo y lo marca
+leído. Funciona con la misma configuración y base que `rssdesk`, también sin
+conexión cuando el contenido está guardado.
+
+| Tecla | Acción |
+|---|---|
+| Tab; flechas o j/k | Cambiar panel; navegar |
+| Enter; q/Esc | Abrir artículo; volver o salir |
+| r; s | Alternar leído; guardado |
+| u; g | Filtrar sin leer; guardados |
+| / | Buscar con FTS5; consulta vacía limpia el filtro |
+| [ / ]; RePág / AvPág | Página anterior / siguiente del archivo |
+| Espacio / b | Avanzar / retroceder una pantalla al leer |
+| R; S | Refrescar fuentes; sincronizar con el hub |
+| a; ? | Añadir fuente; mostrar ayuda |
+
+Las listas cargan páginas de 100 artículos. El terminal necesita al menos 45×10
+caracteres; 80×24 permite ver mejor los atajos. La sincronización se solicita
+con `S`: los cambios quedan en la cola local hasta entonces. Si hay hub,
+las altas y el refresco se realizan allí, salvo que se active explícitamente
+`desktop.fetch_locally`. Mientras se realiza una petición de red, se muestra
+su estado y la interfaz espera a que termine. Las exportaciones y la gestión
+avanzada siguen disponibles en los subcomandos de `rss`.
+
+## Importación de Inoreader
+
+El importador lee directamente el ZIP con `subscriptions.xml` y `starred.json`:
+
+```bash
+rss import-inoreader '/ruta/exportacion.zip'           # solo previsualizar
+rss import-inoreader '/ruta/exportacion.zip' --apply   # respaldar e importar
+```
+
+La previsualización trabaja sobre una copia en memoria y no crea ni modifica
+la base de destino. `--apply` crea primero una copia SQLite coherente en
+`backups/`, junto a la base, y después importa en una sola transacción.
+`--json` devuelve los recuentos, el hash del ZIP y la ruta del respaldo.
+
+Se importan fuentes, carpetas, artículos guardados, contenido disponible,
+autores, fechas, estados y enlaces a adjuntos. Cada artículo conserva además
+su registro JSON original como procedencia local. El HTML de lectura se sanea;
+el original permanece en esa procedencia. Repetir el ZIP no duplica los
+artículos ni deshace cambios posteriores de leído/guardado. Las coincidencias
+ambiguas con artículos existentes quedan pendientes con un aviso.
+
+Una fuente puede aparecer en varias carpetas de Inoreader. Se conserva una
+ubicación principal y se crea una **carpeta inteligente** para cada ubicación
+adicional, con el nombre `Carpeta · Inoreader`. Esa vista reúne los feeds
+normales de la carpeta y los compartidos, sin duplicar sus artículos, y está
+disponible en el árbol del escritorio. La estructura original también se
+conserva en la base. Las etiquetas que no son carpetas se importan como etiquetas.
+
+El archivo puede contener solo resúmenes o enlaces: el importador conserva lo
+que contiene, sin descargar artículos completos, imágenes ni adjuntos. Las
+fuentes de guardados que ya no aparecen en el OPML se mantienen desactivadas.
+Los formatos adicionales desconocidos se rechazan para evitar pérdidas silenciosas.
+
+Si usas hub, ejecuta la importación con la configuración y base del **servidor**;
+los clientes reciben metadatos y piden los cuerpos al abrir cada artículo. El
+comando impide aplicar una importación en un cliente con `hub_url` configurado.
+La procedencia y el historial de importaciones son locales a la base importada:
+inclúyelos en sus respaldos. Conserva también el ZIP original.
 
 ## Webs sin feed RSS
 
@@ -165,13 +260,19 @@ aviso agrupado, no cuarenta.
 ## Pruebas
 
 ```bash
-.venv/bin/python -m pytest packages/core/tests packages/hub/tests -q
+QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest -q
 ```
 
 Incluyen convergencia entre dispositivos con conflictos reales, feeds rotos,
-fechas imposibles, GUID duplicados y el ciclo completo hub↔cliente por HTTP.
+fechas imposibles, GUID duplicados, CLI/TUI y el ciclo completo hub↔cliente por HTTP.
+El workflow `.github/workflows/python.yml` ejecuta esta suite en Linux y macOS
+cuando se publique el cambio. Una ejecución local en Linux no valida un Mac.
 
 ## Licencia
+
+El plan de distribución para Linux, Windows y macOS se encuentra en
+[docs/empaquetacion.md](docs/empaquetacion.md). Todavía no se distribuyen
+instaladores nativos firmados.
 
 **AGPL-3.0-or-later** (texto completo en [`LICENSE`](LICENSE)).
 

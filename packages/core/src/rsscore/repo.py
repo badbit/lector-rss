@@ -41,6 +41,7 @@ def append_change(
     lamport: int | None = None,
     dev: str | None = None,
     to_outbox: bool = True,
+    ts: int | None = None,
 ) -> ChangeOp:
     """Registra una escritura local en el diario (y en la cola de subida)."""
     dev = dev or device_id(conn)
@@ -52,7 +53,7 @@ def append_change(
         entity_id=entity_id,
         field=field,
         value=value,
-        ts=now_ms(),
+        ts=now_ms() if ts is None else ts,
     )
     value_json = json.dumps(value, ensure_ascii=False)
     cur = conn.execute(

@@ -1,8 +1,11 @@
 # Configuración del lector RSS.
 # Cópialo a ~/.config/rss/config.yaml y ajusta lo que necesites.
 # También se puede apuntar con la variable de entorno RSS_CONFIG.
+# En macOS: ~/Library/Application Support/rss/config.yaml (ver docs/macos.md).
 
-db_path: ~/.local/share/rss/rss.db
+# Sin db_path se usa la ruta de datos de cada plataforma.
+# Descomenta para elegir una base existente o una ubicación propia:
+# db_path: ~/.local/share/rss/rss.db
 device_name: portatil
 
 fetch:
