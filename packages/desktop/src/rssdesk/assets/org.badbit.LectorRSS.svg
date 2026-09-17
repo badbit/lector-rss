@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 32 32">
+  <!-- RSS paths: Lucide / Feather, ISC and MIT; see LICENSE-icons.txt. -->
+  <rect x="1" y="1" width="30" height="30" rx="7" fill="#e8663d"/>
+  <g transform="translate(4 4)" fill="none" stroke="#fff" stroke-width="2"
+     stroke-linecap="round" stroke-linejoin="round">
+    <path d="M4 11a9 9 0 0 1 9 9"/>
+    <path d="M4 4a16 16 0 0 1 16 16"/>
+    <circle cx="5" cy="19" r="1"/>
+  </g>
+</svg>

@@ -14,9 +14,9 @@ import respx
 from rsscore import repo
 from rsscore.config import FetchConfig
 from rsscore.db import open_db
-from rsscore.ids import now_ms
+from rsscore.ids import hash_content, hash_guid, now_ms
 from rsscore.ingest import Ingestor
-from rsscore.models import Feed
+from rsscore.models import Entity, Entry, Feed
 from rsscore.parse import parse_feed
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -110,6 +110,128 @@ async def test_ingesta_completa_y_sin_duplicar(conn, cfg):
         assert not segundo.new_entries, "reingerir el mismo feed no puede duplicar"
         assert segundo.skipped == 2
     assert ruta.call_count == 2
+
+
+def _feed_xml(*items: str) -> bytes:
+    return (
+        "<?xml version='1.0'?><rss version='2.0'><channel><title>Duplicados</title>"
+        + "".join(items)
+        + "</channel></rss>"
+    ).encode()
+
+
+def _item(guid: str, url: str, *, title: str = "La misma noticia", body: str = "") -> str:
+    body = body or ("contenido " * 120)
+    return (
+        f"<item><guid>{guid}</guid><link>{url}</link><title>{title}</title>"
+        f"<description>{body}</description></item>"
+    )
+
+
+@respx.mock
+async def test_guid_distinto_con_url_canonica_igual_se_elimina(conn, cfg):
+    url = "https://ejemplo.org/duplicado"
+    respx.get(url).mock(return_value=httpx.Response(200, content=_feed_xml(
+        _item("uno", "https://noticias.example/a?utm_source=boletin"),
+        _item("dos", "https://noticias.example/a#comentarios"),
+    )))
+    feed = alta(conn, url)
+
+    async with Ingestor(conn, cfg) as ing:
+        result = await ing.refresh_feed(feed)
+
+    assert len(result.new_entries) == 1
+    assert result.duplicates_removed == 1
+    assert conn.execute("SELECT COUNT(*) FROM entries").fetchone()[0] == 1
+
+
+@respx.mock
+async def test_guid_y_url_distintos_con_contenido_igual_se_eliminan(conn, cfg):
+    url = "https://ejemplo.org/duplicado-por-contenido"
+    respx.get(url).mock(return_value=httpx.Response(200, content=_feed_xml(
+        _item("uno", "https://noticias.example/a"),
+        _item("dos", "https://noticias.example/copia"),
+    )))
+    feed = alta(conn, url)
+
+    async with Ingestor(conn, cfg) as ing:
+        result = await ing.refresh_feed(feed)
+
+    assert len(result.new_entries) == 1
+    assert result.duplicates_removed == 1
+    assert conn.execute("SELECT COUNT(*) FROM entries").fetchone()[0] == 1
+
+
+@respx.mock
+async def test_contenido_igual_en_dos_feeds_se_conserva(conn, cfg):
+    urls = ["https://uno.example/feed", "https://dos.example/feed"]
+    for i, url in enumerate(urls):
+        respx.get(url).mock(return_value=httpx.Response(200, content=_feed_xml(
+            _item(f"g{i}", f"https://medio{i}.example/noticia"),
+        )))
+
+    feeds = [alta(conn, url) for url in urls]
+    async with Ingestor(conn, cfg) as ing:
+        first = await ing.refresh_feed(feeds[0])
+        second = await ing.refresh_feed(feeds[1])
+
+    assert len(first.new_entries) == len(second.new_entries) == 1
+    assert second.duplicate_of, "entre medios solo se anota: no se elimina"
+    assert conn.execute("SELECT COUNT(*) FROM entries").fetchone()[0] == 2
+
+
+def test_limpieza_historica_fusiona_estado_y_emite_tombstone(conn):
+    feed = alta(conn)
+    common = dict(
+        feed_id=feed.id,
+        content_hash=hash_content("Noticia", "cuerpo"),
+        url="https://ejemplo.org/noticia",
+        title="Noticia",
+        summary="cuerpo",
+        published_at=1_700_000_000_000,
+    )
+    first = Entry(guid_hash=hash_guid(feed.id, "g1"), fetched_at=1000, **common)
+    second = Entry(guid_hash=hash_guid(feed.id, "g2"), fetched_at=2000, **common)
+    repo.insert_entry(conn, first)
+    repo.insert_entry(conn, second)
+    repo.set_read(conn, [first.id], True)
+    repo.set_starred(conn, [second.id], True)
+    tag = repo.get_or_create_tag(conn, "importante")
+    repo.tag_entry(conn, second.id, tag.id)
+
+    assert repo.deduplicate_feed(conn, feed.id) == 1
+
+    entries = repo.select_entries(conn, repo.EntrySelection(limit=10))
+    assert [entry.id for entry in entries] == [first.id]
+    state = repo.get_state(conn, first.id)
+    assert state and state.read is False and state.starred is True
+    assert [item.name for item in repo.entry_tags(conn, first.id)] == ["importante"]
+    ops, _, _ = repo.changes_since(conn, 0, 10_000)
+    assert any(
+        op.entity is Entity.ENTRY and op.entity_id == second.id and op.field == "deleted"
+        for op in ops
+    )
+
+
+def test_una_url_reutilizada_meses_despues_no_es_un_duplicado(conn):
+    feed = alta(conn)
+    first = Entry(
+        feed_id=feed.id,
+        guid_hash=hash_guid(feed.id, "enero"),
+        content_hash=hash_content("Edición de enero"),
+        url="https://ejemplo.org/edicion-actual",
+        title="Edición de enero",
+        published_at=1_700_000_000_000,
+    )
+    later = Entry(
+        feed_id=feed.id,
+        guid_hash=hash_guid(feed.id, "febrero"),
+        content_hash=hash_content("Edición de febrero"),
+        url="https://ejemplo.org/edicion-actual",
+        title="Edición de febrero",
+        published_at=first.published_at + 31 * 86_400_000,
+    )
+    assert repo.entries_are_duplicates(first, later) is None
 
 
 @respx.mock

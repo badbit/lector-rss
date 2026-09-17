@@ -4,7 +4,7 @@ Cliente **delgado**: no descarga feeds, no genera EPUB ni envía correos. Todo e
 vive en el hub. La app replica una ventana del archivo, la lee sin conexión y
 sincroniza el estado.
 
-Código en `mobile/`. Flutter **3.35.6** / Dart 3.9, `sqflite` con SQL directo.
+Código en `mobile/`. Flutter **3.47** o posterior / Dart 3.13, `sqflite` con SQL directo.
 El mínimo de Flutter corresponde al archivo `mobile/pubspec.lock`.
 
 ## Qué hay hecho
@@ -18,10 +18,13 @@ El mínimo de Flutter corresponde al archivo `mobile/pubspec.lock`.
 | Navegación | carpetas, feeds y contadores de no leídos |
 | Lectura | lista paginada, artículo sin JavaScript, cuerpo cacheado |
 | Marcar | leído y guardado, con gestos en la lista |
+| Suscripciones | alta de feeds o sitios desde el móvil |
+| Segundo plano | sincronización periódica con WorkManager |
+| Exportar | Obsidian mediante el escritorio y Kindle mediante el hub |
+| Credenciales | token guardado en el almacén seguro de Android |
 | Recuperación | borrar la copia local y volver a traérsela del hub |
 
-Pendiente: avisos por UnifiedPush, sincronización en segundo plano con
-WorkManager, exportar a Obsidian/Kindle desde el móvil y empaquetado para F-Droid.
+Pendiente: avisos por UnifiedPush y empaquetado para F-Droid.
 
 ## Compilar
 

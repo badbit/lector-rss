@@ -8,6 +8,7 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_widget_from_html_core/flutter_widget_from_html_core.dart';
 import 'package:intl/intl.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../app_state.dart';
 import '../models.dart';
@@ -60,20 +61,63 @@ class _ArticuloPageState extends State<ArticuloPage> {
     setState(() => _entrada = _entrada.copyWith(starred: nuevo));
   }
 
+  Future<void> _exportar(String destino) async {
+    try {
+      if (destino == 'obsidian') {
+        await widget.estado.exportarObsidian(_entrada.id);
+      } else {
+        await widget.estado.enviarKindle(_entrada.id);
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(destino == 'obsidian'
+                ? 'Exportación a Obsidian encolada'
+                : 'Artículo enviado al Kindle'),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('$e')));
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final tema = Theme.of(context);
-    final fecha = DateFormat('d MMM yyyy, HH:mm', 'es').format(_entrada.published);
+    final fecha =
+        DateFormat('d MMM yyyy, HH:mm', 'es').format(_entrada.published);
 
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.feedTitulo, overflow: TextOverflow.ellipsis),
         actions: [
+          if (_entrada.url?.isNotEmpty ?? false)
+            IconButton(
+              tooltip: 'Abrir el original',
+              icon: const Icon(Icons.open_in_browser),
+              onPressed: () => launchUrl(
+                Uri.parse(_entrada.url!),
+                mode: LaunchMode.externalApplication,
+              ),
+            ),
           IconButton(
             tooltip: _entrada.starred ? 'Quitar de guardados' : 'Guardar',
             icon: Icon(_entrada.starred ? Icons.star : Icons.star_border),
             color: _entrada.starred ? Colors.amber : null,
             onPressed: _alternarGuardado,
+          ),
+          PopupMenuButton<String>(
+            tooltip: 'Exportar',
+            onSelected: _exportar,
+            itemBuilder: (_) => const [
+              PopupMenuItem(
+                  value: 'obsidian', child: Text('Enviar a Obsidian')),
+              PopupMenuItem(value: 'kindle', child: Text('Enviar al Kindle')),
+            ],
           ),
           IconButton(
             tooltip: 'Marcar como no leído',

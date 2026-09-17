@@ -10,8 +10,18 @@ from __future__ import annotations
 import hashlib
 import os
 import time
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 _B32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"  # Crockford: sin I, L, O, U
+
+_TRACKING_PARAMS = frozenset(
+    {
+        "fbclid",
+        "gclid",
+        "mc_cid",
+        "mc_eid",
+    }
+)
 
 
 def now_ms() -> int:
@@ -50,3 +60,42 @@ def hash_content(*parts: str | None) -> str:
         h.update((part or "").strip().casefold().encode())
         h.update(b"\x00")
     return h.hexdigest()
+
+
+def canonical_url(url: str | None) -> str:
+    """URL comparable para deduplicar sin modificar el enlace que verá el usuario.
+
+    Quita fragmentos y parámetros de rastreo, normaliza host/puertos y ordena la
+    consulta. Dos enlaces que solo se distinguen por ``utm_*`` apuntan al mismo
+    artículo, pero el valor original se conserva en la base de datos.
+    """
+    if not url or not url.strip():
+        return ""
+    try:
+        parts = urlsplit(url.strip())
+        host = (parts.hostname or "").lower()
+        port = parts.port
+    except ValueError:
+        return url.strip()
+    if not host:
+        return url.strip()
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    if port and not ((parts.scheme.lower() == "http" and port == 80) or (
+        parts.scheme.lower() == "https" and port == 443
+    )):
+        host = f"{host}:{port}"
+    if parts.username:
+        auth = parts.username
+        if parts.password:
+            auth += f":{parts.password}"
+        host = f"{auth}@{host}"
+    query = sorted(
+        (key, value)
+        for key, value in parse_qsl(parts.query, keep_blank_values=True)
+        if not key.casefold().startswith("utm_") and key.casefold() not in _TRACKING_PARAMS
+    )
+    path = parts.path or "/"
+    if path != "/":
+        path = path.rstrip("/")
+    return urlunsplit((parts.scheme.lower(), host, path, urlencode(query, doseq=True), ""))

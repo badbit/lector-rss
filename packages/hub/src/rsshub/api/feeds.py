@@ -221,19 +221,25 @@ async def refresh_feed(feed_id: str) -> dict:
     async with Ingestor(conn, cfg, on_new_entry=_build_rules_hook(conn, cfg)) as ingestor:
         result = await ingestor.refresh_feed(feed)
     bus.publish({"type": "entries_changed", "feed_id": feed_id})
-    return {"feed_id": feed_id, "nuevas": len(result.new_entries), "estado": result.status}
+    return {
+        "feed_id": feed_id,
+        "nuevas": len(result.new_entries),
+        "duplicadas_eliminadas": result.duplicates_removed,
+        "estado": result.status,
+    }
 
 
 @router.post("/refresh")
-async def refresh_all() -> dict:
+async def refresh_all(force: bool = False) -> dict:
     from rsscore.ingest import Ingestor
 
     conn, cfg = db(), config()
     async with Ingestor(conn, cfg, on_new_entry=_build_rules_hook(conn, cfg)) as ingestor:
-        results = await ingestor.refresh_due()
+        results = await (ingestor.refresh_all() if force else ingestor.refresh_due())
     total = sum(len(r.new_entries) for r in results)
+    duplicadas = sum(r.duplicates_removed for r in results)
     bus.publish({"type": "entries_changed"})
-    return {"feeds": len(results), "nuevas": total}
+    return {"feeds": len(results), "nuevas": total, "duplicadas_eliminadas": duplicadas}
 
 
 @router.post("/{feed_id}/read")

@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from .. import repo
 from ..db import observe_lamport
 from ..ids import now_ms
-from ..models import ChangeOp, Entity
+from ..models import ChangeOp, Entity, Entry
 
 __all__ = ["ApplyResult", "apply_ops", "replay_pending"]
 
@@ -43,6 +43,7 @@ class ApplyResult:
 # Columnas escribibles por entidad. Es una lista blanca: `field` viene de la red
 # y se interpola en el SQL, así que nunca puede salir de aquí.
 _FIELDS: dict[Entity, dict[str, str]] = {
+    Entity.ENTRY: {"data": "data", "deleted": "deleted"},
     Entity.ENTRY_STATE: {"read": "read", "starred": "starred"},
     Entity.ENTRY_TAG: {"deleted": "deleted"},
     Entity.TAG: {"name": "name", "color": "color", "deleted": "deleted"},
@@ -140,12 +141,18 @@ def _apply_one(conn: sqlite3.Connection, op: ChangeOp) -> str:
     if not columnas or op.field not in columnas:
         raise ValueError(f"campo no sincronizable: {op.entity}.{op.field}")
     columna = columnas[op.field]
-    tabla = _TABLES[op.entity]
     valor = _coerce(op.field, op.value)
+
+    if op.entity is Entity.ENTRY:
+        return _apply_entry(conn, op)
+
+    tabla = _TABLES[op.entity]
 
     match op.entity:
         case Entity.ENTRY_STATE:
             if not _row_exists(conn, "entries", "id", op.entity_id):
+                if repo.field_clock(conn, Entity.ENTRY, op.entity_id, "deleted"):
+                    return "ignored"
                 return "pending"
             reloj = repo.field_clock(conn, op.entity, op.entity_id, op.field)
             if reloj and not op.wins_over(*reloj):
@@ -166,6 +173,8 @@ def _apply_one(conn: sqlite3.Connection, op: ChangeOp) -> str:
             if not entry_id or not tag_id:
                 raise ValueError("id compuesto inválido, se esperaba 'entry_id:tag_id'")
             if not _row_exists(conn, "entries", "id", entry_id):
+                if repo.field_clock(conn, Entity.ENTRY, entry_id, "deleted"):
+                    return "ignored"
                 return "pending"
             if not _row_exists(conn, "tags", "id", tag_id):
                 # La etiqueta llegará en su propia operación; hasta entonces, espera.
@@ -195,6 +204,41 @@ def _apply_one(conn: sqlite3.Connection, op: ChangeOp) -> str:
         f"UPDATE {tabla} SET {columna} = ?, lamport = ?, device_id = ? WHERE id = ?",
         (valor, op.lamport, op.device_id, op.entity_id),
     )
+    _stamp(conn, op)
+    return "applied"
+
+
+def _apply_entry(conn: sqlite3.Connection, op: ChangeOp) -> str:
+    """Materializa una entrada nueva o el tombstone que la retira."""
+    own_clock = repo.field_clock(conn, op.entity, op.entity_id, op.field)
+    if own_clock and not op.wins_over(*own_clock):
+        return "ignored"
+
+    if op.field == "deleted":
+        if not bool(op.value):
+            raise ValueError("una entrada eliminada no se puede resucitar sin sus datos")
+        repo.delete_entry(conn, op.entity_id, track=False)
+        _stamp(conn, op)
+        return "applied"
+
+    deleted_clock = repo.field_clock(conn, op.entity, op.entity_id, "deleted")
+    if deleted_clock and not op.wins_over(*deleted_clock):
+        return "ignored"
+    if not isinstance(op.value, dict):
+        raise ValueError("entry.data debe ser un objeto")
+    data = {**op.value, "id": op.entity_id}
+    feed_id = data.get("feed_id")
+    if not isinstance(feed_id, str) or not _row_exists(conn, "feeds", "id", feed_id):
+        return "pending"
+    entry = Entry.model_validate(data)
+    if repo.get_entry(conn, op.entity_id, with_body=False):
+        # Los metadatos cambiaron pero el cuerpo nuevo no viaja en el diario.
+        # Obligar a pedirlo otra vez evita enseñar una versión anterior offline.
+        conn.execute("DELETE FROM entry_bodies WHERE entry_id = ?", (op.entity_id,))
+        conn.execute("UPDATE entries SET has_body = 0 WHERE id = ?", (op.entity_id,))
+        repo.update_entry(conn, op.entity_id, entry, track=False)
+    else:
+        repo.insert_entry(conn, entry, track=False)
     _stamp(conn, op)
     return "applied"
 

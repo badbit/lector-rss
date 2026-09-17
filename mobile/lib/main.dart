@@ -8,12 +8,15 @@ import 'package:flutter/material.dart';
 import 'package:intl/date_symbol_data_local.dart';
 
 import 'app_state.dart';
+import 'background.dart';
 import 'ui/inicio.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await initializeDateFormatting('es');
   final estado = await AppState.crear();
+  await configurarSincronizacionEnSegundoPlano(
+      estado.sincronizacionEnSegundoPlano);
   runApp(RssApp(estado: estado));
 }
 

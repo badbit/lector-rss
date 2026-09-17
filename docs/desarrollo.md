@@ -141,6 +141,38 @@ planificador de revistas existente todavía es un marcador; la respuesta SMTP
 no confirma la entrega final al Kindle. Tampoco se resuelven en esta iteración
 los pendientes de sincronización y ejecución remota descritos abajo.
 
+## Integración de la rama alpha 0.2 — 16 de septiembre de 2026
+
+La rama `feature/alpha-0.2` se desarrolló en paralelo a las tres iteraciones
+anteriores y resolvió dos prioridades que esta revisión daba por pendientes:
+
+- **Escritorio conectado al hub.** Con un hub configurado, `Backend` le ordena
+  el refresco, sincroniza el resultado y le pide el cuerpo de cada artículo al
+  abrirlo. `desktop.fetch_locally` conserva el modo autónomo.
+- **Cola remota de exportaciones.** `Backend.worker_exportaciones` sincroniza,
+  recoge los trabajos de `/export/jobs/next`, obtiene los artículos y cuerpos
+  que falten antes de exportar y confirma el resultado en `/export/jobs/finish`.
+
+También incorporó la deduplicación de publicaciones, la exportación desde el
+móvil con sincronización periódica mediante WorkManager, la interfaz de
+terminal, la importación de Inoreader y un CI de Python para Linux y macOS.
+
+Las dos ramas traían una migración `005`. La de Inoreader pasó a
+`006_imports.sql`: una base en la versión 4 recibe ambas en orden. Una base que
+se hubiera migrado con la rama antes de la fusión (versión 5 con `import_batches`
+y sin `entry_arrivals`) hace fallar la 006 de forma explícita; para repararla hay
+que ejecutar `005_entry_arrivals.sql` y fijar `PRAGMA user_version = 6`.
+
+Verificación tras la fusión:
+
+- **214 pruebas Python aprobadas**, Ruff sin incidencias. Las migraciones se
+  aplicaron sobre una copia de una base real en la versión 4 y terminaron en la 6
+  con `integrity_check` correcto.
+- **18 pruebas Flutter aprobadas** y `flutter analyze` sin incidencias, con
+  Flutter 3.47.4 y `flutter pub get --enforce-lockfile`. El lockfile de la rama
+  no se resuelve con Flutter 3.35.6 ni 3.44: el mínimo es 3.47. No se construyó
+  un APK ni se probó en un dispositivo.
+
 ## Siguientes prioridades
 
 1. **Arranque y recuperación con cambios locales.** Python y Dart aplican el
@@ -148,18 +180,11 @@ los pendientes de sincronización y ejecución remota descritos abajo.
    cambios sin subir y evitar que una foto los sobrescriba. También hay que
    asociar los cursores a la identidad del hub y rescatar el archivo al ampliar
    la ventana temporal, además de definir una política de retención local.
-2. **Cola remota de Obsidian.** El hub ofrece `/export/jobs/next` y
-   `/export/jobs/finish`, pero `Backend.worker_exportaciones` consulta solamente
-   su base local. Hace falta recoger y confirmar los trabajos remotos y obtener
-   sus artículos y cuerpos antes de exportar.
-3. **Escritorio conectado al hub.** El refresco de `Backend` sigue usando un
-   `Ingestor` local aunque haya hub configurado. Hay que definir y comprobar el
-   funcionamiento independiente y el conectado para que el segundo delegue la
-   descarga y recupere los cuerpos del servidor.
-4. **Funciones Android pendientes.** Tras cerrar la sincronización: exportación
-   desde el móvil, WorkManager, UnifiedPush y empaquetado F-Droid, conforme a
-   [la guía Android](android.md).
-5. **Validación continua y empaquetado.** Incorporar CI para Python y Flutter,
-   verificar instalación de wheels y ejecutar una prueba de lectura y sincronización
+2. **Funciones Android pendientes.** UnifiedPush y empaquetado F-Droid, conforme
+   a [la guía Android](android.md). La exportación desde el móvil y WorkManager
+   llegaron con la rama alpha 0.2.
+3. **Validación continua y empaquetado.** El CI ya ejecuta Ruff y pytest en Linux
+   y macOS; falta incorporar Flutter, verificar instalación de wheels y ejecutar
+   una prueba de lectura y sincronización
    en un dispositivo Android real. Las dependencias Python solo fijan versiones mínimas: conviene
    registrar un conjunto reproducible para despliegues.

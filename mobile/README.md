@@ -12,7 +12,7 @@ contrato de la API y los puntos que hay que respetar al tocar la sincronización
 está en [`../docs/android.md`](../docs/android.md).
 
 ```bash
-flutter pub get --enforce-lockfile  # Flutter 3.35.6 o compatible con el lockfile
+flutter pub get --enforce-lockfile  # Flutter 3.47 o posterior, según el lockfile
 flutter test      # motor, arranque, migración y altas incrementales; sin emulador
 flutter analyze
 flutter build apk --debug

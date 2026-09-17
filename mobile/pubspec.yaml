@@ -17,7 +17,10 @@ dependencies:
   path_provider: ^2.1.4
   http: ^1.2.2
   shared_preferences: ^2.3.2
+  flutter_secure_storage: ^11.0.0
   intl: ^0.19.0
+  url_launcher: ^6.3.2
+  workmanager: ^0.10.9
   # Render del artículo sin motor web completo: ni JavaScript ni peticiones
   # remotas, igual que el cliente de escritorio.
   flutter_widget_from_html_core: ^0.15.2

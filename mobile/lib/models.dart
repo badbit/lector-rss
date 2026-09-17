@@ -64,8 +64,9 @@ class Feed {
   final bool deleted;
   final int unread;
 
-  String get displayTitle =>
-      (customTitle?.isNotEmpty ?? false) ? customTitle! : (title.isNotEmpty ? title : url);
+  String get displayTitle => (customTitle?.isNotEmpty ?? false)
+      ? customTitle!
+      : (title.isNotEmpty ? title : url);
 
   /// `true` si no viene de un RSS, sino de raspar o vigilar una web.
   bool get isScraped => sourceKind != 'feed';
@@ -127,7 +128,8 @@ class Entry {
   final String? bodyText;
   final List<String> tags;
 
-  bool get hasBody => (bodyHtml?.isNotEmpty ?? false) || (bodyText?.isNotEmpty ?? false);
+  bool get hasBody =>
+      (bodyHtml?.isNotEmpty ?? false) || (bodyText?.isNotEmpty ?? false);
 
   DateTime get published => DateTime.fromMillisecondsSinceEpoch(publishedAt);
 
@@ -146,7 +148,9 @@ class Entry {
         tags: ((j['tags'] ?? const []) as List).cast<String>(),
       );
 
-  Entry copyWith({bool? read, bool? starred, String? bodyHtml, String? bodyText}) => Entry(
+  Entry copyWith(
+          {bool? read, bool? starred, String? bodyHtml, String? bodyText}) =>
+      Entry(
         id: id,
         feedId: feedId,
         url: url,

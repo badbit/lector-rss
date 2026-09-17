@@ -22,12 +22,14 @@ class Repo {
   Future<List<Folder>> carpetas() async {
     final filas = await db.query('folders',
         where: 'deleted = 0', orderBy: 'position, name');
-    return filas.map((f) => Folder(
-          id: f['id'] as String,
-          parentId: f['parent_id'] as String?,
-          name: f['name'] as String,
-          position: f['position'] as int,
-        )).toList();
+    return filas
+        .map((f) => Folder(
+              id: f['id'] as String,
+              parentId: f['parent_id'] as String?,
+              name: f['name'] as String,
+              position: f['position'] as int,
+            ))
+        .toList();
   }
 
   Future<List<Feed>> feeds() async {
@@ -40,22 +42,24 @@ class Repo {
       FROM feeds f WHERE f.deleted = 0
       ORDER BY COALESCE(NULLIF(f.custom_title, ''), f.title), f.url
     ''');
-    return filas.map((f) => Feed(
-          id: f['id'] as String,
-          folderId: f['folder_id'] as String?,
-          url: f['url'] as String,
-          siteUrl: f['site_url'] as String?,
-          title: (f['title'] ?? '') as String,
-          customTitle: f['custom_title'] as String?,
-          iconUrl: f['icon_url'] as String?,
-          sourceKind: (f['source_kind'] ?? 'feed') as String,
-          unread: (f['unread'] ?? 0) as int,
-        )).toList();
+    return filas
+        .map((f) => Feed(
+              id: f['id'] as String,
+              folderId: f['folder_id'] as String?,
+              url: f['url'] as String,
+              siteUrl: f['site_url'] as String?,
+              title: (f['title'] ?? '') as String,
+              customTitle: f['custom_title'] as String?,
+              iconUrl: f['icon_url'] as String?,
+              sourceKind: (f['source_kind'] ?? 'feed') as String,
+              unread: (f['unread'] ?? 0) as int,
+            ))
+        .toList();
   }
 
   Future<int> totalSinLeer() async {
-    final filas = await db.rawQuery(
-        'SELECT COUNT(*) AS n FROM entry_state WHERE read = 0');
+    final filas = await db
+        .rawQuery('SELECT COUNT(*) AS n FROM entry_state WHERE read = 0');
     return (filas.first['n'] ?? 0) as int;
   }
 
@@ -78,7 +82,8 @@ class Repo {
       args.add(feedId);
     }
     if (folderId != null) {
-      where.add('e.feed_id IN (SELECT id FROM feeds WHERE folder_id = ? AND deleted = 0)');
+      where.add(
+          'e.feed_id IN (SELECT id FROM feeds WHERE folder_id = ? AND deleted = 0)');
       args.add(folderId);
     }
     if (soloSinLeer) where.add('s.read = 0');
@@ -86,10 +91,14 @@ class Repo {
     if (busqueda != null && busqueda.trim().isNotEmpty) {
       where.add('(e.title LIKE ? OR e.summary LIKE ?)');
       final patron = '%${busqueda.trim()}%';
-      args..add(patron)..add(patron);
+      args
+        ..add(patron)
+        ..add(patron);
     }
 
-    args..add(limit)..add(offset);
+    args
+      ..add(limit)
+      ..add(offset);
     final filas = await db.rawQuery('''
       SELECT e.*, s.read, s.starred FROM entries e
       JOIN entry_state s ON s.entry_id = e.id
@@ -125,7 +134,8 @@ class Repo {
         bodyText: f['body_text'] as String?,
       );
 
-  Future<void> guardarCuerpo(String entryId, String? html, String? texto) async {
+  Future<void> guardarCuerpo(
+      String entryId, String? html, String? texto) async {
     await db.insert(
       'entry_bodies',
       {
@@ -136,7 +146,8 @@ class Repo {
       },
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
-    await db.update('entries', {'has_body': 1}, where: 'id = ?', whereArgs: [entryId]);
+    await db.update('entries', {'has_body': 1},
+        where: 'id = ?', whereArgs: [entryId]);
   }
 
   // ============================================== escrituras que se sincronizan
@@ -161,7 +172,8 @@ class Repo {
             $columnaFecha = excluded.$columnaFecha
         ''', [id, valor ? 1 : 0, valor ? ahora : null]);
 
-        await _anotar(txn, 'entry_state', id, campo, valor, lamport, deviceId, ahora);
+        await _anotar(
+            txn, 'entry_state', id, campo, valor, lamport, deviceId, ahora);
       });
     }
   }

@@ -7,6 +7,7 @@ ambos y no haya dos formas de configurar lo mismo.
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 from typing import Literal
 
@@ -73,8 +74,21 @@ class HubConfig(BaseModel):
     compact_at_hour: int = 4      # compactación nocturna del change_log
 
 
+class DesktopConfig(BaseModel):
+    """Comportamiento del cliente gráfico de escritorio.
+
+    Con un hub configurado, éste es la fuente de verdad y descarga los feeds.
+    ``fetch_locally`` permite conservar un modo autónomo explícito para quien no
+    quiera desplegar el servicio. ``toolbar_style`` elige el aspecto de los
+    botones de la barra: sólo texto, texto con ícono o sólo íconos.
+    """
+
+    fetch_locally: bool | None = None
+    toolbar_style: Literal["text", "text_and_icons", "icons"] = "text_and_icons"
+
+
 class Config(BaseModel):
-    db_path: Path = Path("data/rss.db")
+    db_path: Path = Field(default_factory=lambda: data_home() / "rss.db")
     device_name: str = ""
     fetch: FetchConfig = Field(default_factory=FetchConfig)
     smtp: SmtpConfig = Field(default_factory=SmtpConfig)
@@ -82,8 +96,16 @@ class Config(BaseModel):
     magazine: MagazineConfig = Field(default_factory=MagazineConfig)
     notify: NotifyConfig = Field(default_factory=NotifyConfig)
     hub: HubConfig = Field(default_factory=HubConfig)
+    desktop: DesktopConfig = Field(default_factory=DesktopConfig)
     hub_url: str = ""             # que usan los clientes para sincronizar
     hub_token: SecretStr = SecretStr("")
+
+    @property
+    def desktop_fetches_locally(self) -> bool:
+        """Por omisión sólo se descarga localmente cuando no existe un hub."""
+        if self.desktop.fetch_locally is not None:
+            return self.desktop.fetch_locally
+        return not bool(self.hub_url.strip())
 
     @classmethod
     def load(cls, path: str | Path | None = None) -> Config:
@@ -92,6 +114,9 @@ class Config(BaseModel):
         if path.exists():
             data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         cfg = cls.model_validate(data)
+        if "db_path" not in data and Path("data/rss.db").is_file():
+            # Compatibilidad con el valor por omisión anterior. No mover datos.
+            cfg.db_path = Path("data/rss.db").resolve()
         if env_db := os.environ.get("RSS_DB"):
             cfg.db_path = Path(env_db)
         if env_hub := os.environ.get("RSS_HUB_URL"):
@@ -103,11 +128,19 @@ class Config(BaseModel):
 
 
 def config_home() -> Path:
+    if sys.platform == "darwin" and not os.environ.get("XDG_CONFIG_HOME"):
+        # Conserva las instalaciones que ya usaban la ruta XDG en un Mac.
+        legacy = Path.home() / ".config" / "rss"
+        if (legacy / "config.yaml").exists():
+            return legacy
+        return Path.home() / "Library" / "Application Support" / "rss"
     base = os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config")
     return Path(base) / "rss"
 
 
 def data_home() -> Path:
+    if sys.platform == "darwin" and not os.environ.get("XDG_DATA_HOME"):
+        return Path.home() / "Library" / "Application Support" / "rss"
     base = os.environ.get("XDG_DATA_HOME") or (Path.home() / ".local" / "share")
     return Path(base) / "rss"
 

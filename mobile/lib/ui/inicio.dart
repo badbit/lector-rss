@@ -64,16 +64,65 @@ class _InicioPageState extends State<InicioPage> {
     bool sinLeer = false,
     bool guardados = false,
   }) {
-    Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => ArticulosPage(
-        estado: widget.estado,
-        titulo: titulo,
-        feedId: feedId,
-        folderId: folderId,
-        soloSinLeer: sinLeer,
-        soloGuardados: guardados,
+    Navigator.of(context)
+        .push(MaterialPageRoute(
+          builder: (_) => ArticulosPage(
+            estado: widget.estado,
+            titulo: titulo,
+            feedId: feedId,
+            folderId: folderId,
+            soloSinLeer: sinLeer,
+            soloGuardados: guardados,
+          ),
+        ))
+        .then((_) => _cargar());
+  }
+
+  Future<void> _suscribirse() async {
+    final controller = TextEditingController();
+    final url = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Nueva suscripción'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          keyboardType: TextInputType.url,
+          autocorrect: false,
+          decoration: const InputDecoration(
+            labelText: 'Dirección del feed o sitio web',
+            hintText: 'https://ejemplo.org/feed',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () =>
+                Navigator.pop(dialogContext, controller.text.trim()),
+            child: const Text('Suscribirse'),
+          ),
+        ],
       ),
-    )).then((_) => _cargar());
+    );
+    controller.dispose();
+    if (url == null || url.isEmpty || !mounted) return;
+    try {
+      await widget.estado.suscribirse(url);
+      await _cargar();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Suscripción añadida')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('$e')));
+      }
+    }
   }
 
   @override
@@ -84,12 +133,18 @@ class _InicioPageState extends State<InicioPage> {
       appBar: AppBar(
         title: const Text('Lector RSS'),
         actions: [
+          IconButton(
+            tooltip: 'Nueva suscripción',
+            icon: const Icon(Icons.add),
+            onPressed: estado.configurado ? _suscribirse : null,
+          ),
           if (estado.sincronizando)
             const Padding(
               padding: EdgeInsets.symmetric(horizontal: 16),
               child: Center(
                 child: SizedBox(
-                  width: 18, height: 18,
+                  width: 18,
+                  height: 18,
                   child: CircularProgressIndicator(strokeWidth: 2),
                 ),
               ),
@@ -103,7 +158,8 @@ class _InicioPageState extends State<InicioPage> {
           IconButton(
             icon: const Icon(Icons.settings),
             onPressed: () => Navigator.of(context)
-                .push(MaterialPageRoute(builder: (_) => AjustesPage(estado: estado)))
+                .push(MaterialPageRoute(
+                    builder: (_) => AjustesPage(estado: estado)))
                 .then((_) => _cargar()),
           ),
         ],
@@ -133,7 +189,8 @@ class _InicioPageState extends State<InicioPage> {
         Center(
           child: FilledButton(
             onPressed: () => Navigator.of(context)
-                .push(MaterialPageRoute(builder: (_) => AjustesPage(estado: estado)))
+                .push(MaterialPageRoute(
+                    builder: (_) => AjustesPage(estado: estado)))
                 .then((_) => _cargar()),
             child: const Text('Configurar la conexión'),
           ),
@@ -181,19 +238,22 @@ class _InicioPageState extends State<InicioPage> {
         const Padding(
           padding: EdgeInsets.all(32),
           child: Center(
-            child: Text('Sin suscripciones todavía.\nSincroniza para traértelas del hub.',
+            child: Text(
+                'Sin suscripciones todavía.\nSincroniza para traértelas del hub.',
                 textAlign: TextAlign.center),
           ),
         ),
     ];
   }
 
-  Widget _vista(IconData icono, String titulo, int? contador, VoidCallback alPulsar) =>
+  Widget _vista(IconData icono, String titulo, int? contador,
+          VoidCallback alPulsar) =>
       ListTile(
         leading: Icon(icono),
         title: Text(titulo),
         trailing: (contador != null && contador > 0)
-            ? Chip(label: Text('$contador'), visualDensity: VisualDensity.compact)
+            ? Chip(
+                label: Text('$contador'), visualDensity: VisualDensity.compact)
             : null,
         onTap: alPulsar,
       );
@@ -222,10 +282,12 @@ class _InicioPageState extends State<InicioPage> {
   Widget _feed(Feed feed) => ListTile(
         dense: true,
         // Un icono distinto para lo que viene de raspar una web sin RSS.
-        leading: Icon(feed.isScraped ? Icons.travel_explore : Icons.rss_feed, size: 20),
+        leading: Icon(feed.isScraped ? Icons.travel_explore : Icons.rss_feed,
+            size: 20),
         title: Text(feed.displayTitle, overflow: TextOverflow.ellipsis),
         trailing: feed.unread > 0
-            ? Text('${feed.unread}', style: const TextStyle(fontWeight: FontWeight.bold))
+            ? Text('${feed.unread}',
+                style: const TextStyle(fontWeight: FontWeight.bold))
             : null,
         onTap: () => _abrir(titulo: feed.displayTitle, feedId: feed.id),
       );

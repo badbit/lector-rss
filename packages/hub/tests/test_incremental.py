@@ -175,8 +175,11 @@ async def test_una_pagina_invalida_revierte_articulos_y_cursores(pair):
 def test_migracion_incluye_articulos_existentes_y_registra_altas(tmp_path):
     path = tmp_path / "previous.db"
     conn = open_db(path)
+    # Una base de la versión 4 no tiene nada de las migraciones 005 y 006.
     conn.execute("DROP TRIGGER entries_arrival")
     conn.execute("DROP TABLE entry_arrivals")
+    conn.execute("DROP TABLE import_records")
+    conn.execute("DROP TABLE import_batches")
     conn.execute("PRAGMA user_version = 4")
     feed = repo.add_feed(conn, Feed(url="https://example.test/rss"))
     add(conn, feed, "existente")
