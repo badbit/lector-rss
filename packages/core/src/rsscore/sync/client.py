@@ -16,10 +16,10 @@ from dataclasses import dataclass
 import httpx
 
 from .. import repo
-from ..db import device_id
+from ..db import device_id, get_setting, observe_lamport, set_setting
 from ..models import ChangeOp, PullResponse, PushRequest, PushResponse, SyncScope
 from .apply import apply_ops, replay_pending
-from .snapshot import apply_snapshot
+from .snapshot import _transaction, apply_snapshot
 
 log = logging.getLogger("rsscore.sync")
 
@@ -27,6 +27,7 @@ __all__ = ["SyncClient", "SyncStats"]
 
 LOTE_SUBIDA = 500
 LOTE_BAJADA = 2000
+LOTE_ENTRADAS = 500
 
 
 @dataclass(slots=True)
@@ -38,6 +39,7 @@ class SyncStats:
     aparcadas: int = 0
     recuperadas: int = 0
     bootstrap: bool = False
+    articulos: int = 0
 
     def __str__(self) -> str:
         base = (
@@ -48,6 +50,8 @@ class SyncStats:
             base += f", {self.aparcadas} aparcadas"
         if self.recuperadas:
             base += f", {self.recuperadas} recuperadas"
+        if self.articulos:
+            base += f", {self.articulos} artículos nuevos"
         return "arranque inicial · " + base if self.bootstrap else base
 
 
@@ -154,24 +158,45 @@ class SyncClient:
         stats = SyncStats()
         while True:
             desde = self._cursor()
+            desde_entradas = int(get_setting(self.conn, "sync_entries_cursor", "0"))
 
-            async def traer(d=desde):
+            async def traer(d=desde, e=desde_entradas):
                 r = await cliente.get(
                     "/sync/pull",
-                    params={"since": d, "limit": LOTE_BAJADA, "device_id": self.device_id},
+                    params={
+                        "since": d, "limit": LOTE_BAJADA, "device_id": self.device_id,
+                        "entries_since": e,
+                        "entries_limit": LOTE_ENTRADAS,
+                    },
                 )
                 r.raise_for_status()
                 return PullResponse.model_validate(r.json())
 
             respuesta = await self._con_reintentos(traer)
-            if respuesta.ops:
-                resultado = apply_ops(self.conn, respuesta.ops, record=False)
+            with _transaction(self.conn):
+                dependencies = apply_ops(self.conn, respuesta.dependencies, record=False)
+                if dependencies.errors:
+                    raise ValueError("Dependencias inválidas: " + "; ".join(dependencies.errors))
+                for entry in respuesta.entries:
+                    if repo.get_entry(self.conn, entry.id, with_body=False) is None:
+                        repo.insert_entry(self.conn, entry)
+                        stats.articulos += 1
+                resultado = apply_ops(
+                    self.conn, [*respuesta.ops, *respuesta.entry_ops], record=False,
+                )
+                if resultado.errors:
+                    raise ValueError("Cambios inválidos: " + "; ".join(resultado.errors))
                 stats.aplicadas += resultado.applied
                 stats.descartadas += resultado.ignored
                 stats.aparcadas += resultado.pending
                 stats.bajadas += len(respuesta.ops)
-            self._set_cursor(respuesta.cursor)
-            if not respuesta.has_more:
+                self._set_cursor(respuesta.cursor)
+                # Los servidores anteriores no conocen el cursor de artículos.
+                set_setting(self.conn, "sync_entries_cursor", str(max(
+                    desde_entradas, respuesta.entries_cursor,
+                )))
+                observe_lamport(self.conn, respuesta.server_lamport)
+            if not respuesta.has_more and not respuesta.entries_has_more:
                 break
         return stats
 
@@ -211,6 +236,7 @@ class SyncClient:
         stats.aplicadas = bajada.aplicadas
         stats.descartadas = bajada.descartadas
         stats.aparcadas = bajada.aparcadas
+        stats.articulos = bajada.articulos
 
         stats.recuperadas = replay_pending(self.conn)
         return stats

@@ -68,10 +68,14 @@ magazine:
   language: es
   output_dir: ~/Documentos/revistas   # por omisión: ~/.local/share/rss/revistas
   # Con imágenes incrustadas, 200 artículos dan un EPUB pesado; para enviarlo al
-  # Kindle conviene bajar a 30-50 (si se pasa del límite se trocea solo).
+  # Kindle conviene bajar a 30-50. Una revista ya generada demasiado grande se
+  # conserva en disco y no se envía: reduce artículos o desactiva imágenes.
   max_articles: 50
   embed_images: true
   max_image_width: 1200
+  content_mode: full          # full: texto disponible; excerpt: extractos, sin IA
+  excerpt_words: 180          # máximo por extracto, entre 30 y 1000
+  rules: []                  # nombres o ids; coincide con cualquiera, sin ejecutar acciones
 
 # ---------------------------------------------------------------- avisos
 notify:

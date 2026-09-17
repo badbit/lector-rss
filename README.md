@@ -38,6 +38,12 @@ una cola de cambios que sube cuando puede.
 | Importación ZIP de Inoreader | previsualización, respaldo, guardados y procedencia original |
 | Cliente Android (Flutter): lectura sin conexión, sincronización, ámbito parcial | funcionando — guía en `docs/android.md` |
 
+La [revisión de desarrollo](docs/desarrollo.md) recoge las limitaciones verificadas
+y las siguientes prioridades. Los clientes Python y Flutter ya reciben los
+artículos posteriores a su copia inicial, y el escritorio atiende la cola remota
+de exportaciones. Sigue pendiente completar la recuperación cuando hay cambios
+locales sin subir.
+
 ## Instalación
 
 ```bash
@@ -212,6 +218,12 @@ Tres detalles que importan con un archivo permanente:
 - **Compactación**: el diario se colapsa cada noche dejando la última operación
   de cada campo, nunca por encima del cursor del cliente más rezagado.
 
+Las altas de artículos tienen su propio cursor, independiente del diario de
+marcas. Cada página incorpora las suscripciones necesarias y el estado actual
+con sus relojes; los clientes confirman ambos cursores en la misma transacción.
+El [contrato incremental](docs/sincronizacion-incremental.md) explica la ampliación
+del protocolo y sus límites.
+
 ## Publicaciones duplicadas
 
 Durante cada ingesta se conserva una sola publicación cuando, dentro del mismo
@@ -252,21 +264,41 @@ aviso agrupado, no cuarenta.
 - **Obsidian**: Markdown con frontmatter YAML. El escritorio escribe en la
   bóveda; desde el móvil la acción se encola en el hub y el escritorio la
   materializa al arrancar.
-- **Kindle**: se envía **EPUB**, no MOBI — Amazon retiró MOBI de Send-to-Kindle
-  en 2022. El remitente tiene que estar aprobado en Amazon.
+- **Kindle**: se envía EPUB, uno de los [formatos admitidos por Amazon](https://digprjsurvey.amazon.co.uk/csad/help/node/G5WYD9SAF7PGXRNA).
+  El remitente tiene que estar aprobado en Amazon. No se genera MOBI.
 - **Revista**: selección de artículos → EPUB 3 con secciones, TOC anidado y
   portada generada.
+
+Las revistas ahora permiten filtrar mediante reglas sin ejecutar sus acciones,
+y elegir artículos completos o extractos breves del texto disponible (sin IA).
+En el escritorio: **Exportar → Generar revista EPUB** (`Ctrl+M`). Por terminal:
+
+```bash
+rss digest --rule "Lecturas para Kindle" --days 7 --limit 30 --preview
+rss digest --rule "Lecturas para Kindle" --days 7 --limit 30 --brief --out ./revistas/
+# Añadir --send-to-kindle solamente cuando SMTP esté configurado.
+```
+
+La regla debe existir previamente; hay un ejemplo en `rules.example.yaml`.
+Consulta [reglas, revistas y Kindle](docs/reglas-y-kindle.md) para crearla,
+probarla por API, configurar el envío y conocer las diferencias pendientes
+respecto a Inoreader. Los extractos no son resúmenes redactados por IA y todavía
+no hay programación automática de revistas.
 
 ## Pruebas
 
 ```bash
 QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest -q
+.venv/bin/ruff check packages
 ```
 
 Incluyen convergencia entre dispositivos con conflictos reales, feeds rotos,
 fechas imposibles, GUID duplicados, CLI/TUI y el ciclo completo hub↔cliente por HTTP.
-El workflow `.github/workflows/python.yml` ejecuta esta suite en Linux y macOS
-cuando se publique el cambio. Una ejecución local en Linux no valida un Mac.
+Las pruebas de escritorio usan Qt en modo `offscreen`. Las del arranque por
+snapshot comprueban también los relojes por campo, la reversión ante errores,
+la coherencia frente a escrituras concurrentes y el límite de la copia parcial.
+El workflow `.github/workflows/python.yml` ejecuta ruff y esta suite en Linux y
+macOS en cada push y pull request. Una ejecución local en Linux no valida un Mac.
 
 ## Licencia
 

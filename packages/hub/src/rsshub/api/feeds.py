@@ -8,6 +8,7 @@ from rsscore import repo
 from rsscore.models import Feed, Folder
 
 from ..deps import bus, config, db, require_token, write_tx
+from ..scheduler import _build_rules_hook
 
 router = APIRouter(prefix="/feeds", tags=["feeds"], dependencies=[Depends(require_token)])
 folders_router = APIRouter(
@@ -87,7 +88,7 @@ async def add_feed(req: AddFeedRequest) -> FeedOut:
 
     cfg = config()
     conn = db()
-    ingestor = Ingestor(conn, cfg)
+    ingestor = Ingestor(conn, cfg, on_new_entry=_build_rules_hook(conn, cfg))
     try:
         if req.source_kind == "feed":
             feed = await ingestor.add_by_url(req.url, folder_id=req.folder_id)
@@ -111,6 +112,8 @@ async def add_feed(req: AddFeedRequest) -> FeedOut:
         ) from exc
     except Exception as exc:
         raise HTTPException(400, f"No se pudo dar de alta el feed: {exc}") from exc
+    finally:
+        await ingestor.aclose()
     if req.title:
         with write_tx() as c:
             repo.update_feed_meta(c, feed.id, custom_title=req.title)
@@ -214,7 +217,9 @@ async def refresh_feed(feed_id: str) -> dict:
     feed = repo.get_feed(conn, feed_id)
     if not feed:
         raise HTTPException(404, "Feed no encontrado")
-    result = await Ingestor(conn, config()).refresh_feed(feed)
+    cfg = config()
+    async with Ingestor(conn, cfg, on_new_entry=_build_rules_hook(conn, cfg)) as ingestor:
+        result = await ingestor.refresh_feed(feed)
     bus.publish({"type": "entries_changed", "feed_id": feed_id})
     return {
         "feed_id": feed_id,
@@ -228,8 +233,9 @@ async def refresh_feed(feed_id: str) -> dict:
 async def refresh_all(force: bool = False) -> dict:
     from rsscore.ingest import Ingestor
 
-    ingestor = Ingestor(db(), config())
-    results = await (ingestor.refresh_all() if force else ingestor.refresh_due())
+    conn, cfg = db(), config()
+    async with Ingestor(conn, cfg, on_new_entry=_build_rules_hook(conn, cfg)) as ingestor:
+        results = await (ingestor.refresh_all() if force else ingestor.refresh_due())
     total = sum(len(r.new_entries) for r in results)
     duplicadas = sum(r.duplicates_removed for r in results)
     bus.publish({"type": "entries_changed"})

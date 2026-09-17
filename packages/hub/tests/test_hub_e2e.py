@@ -187,3 +187,37 @@ async def test_token_obligatorio_cuando_esta_configurado(tmp_path):
         assert (await c.get("/feeds", headers={"Authorization": "Bearer mal"})).status_code == 403
         ok = await c.get("/feeds", headers={"Authorization": "Bearer clave-secreta"})
         assert ok.status_code == 200
+
+
+@pytest.mark.parametrize("operation", ["add", "refresh_one", "refresh_due"])
+@respx.mock
+async def test_reglas_se_aplican_tambien_en_ingesta_manual(http, hub, operation):
+    from rsscore.models import Feed
+    from rsscore.rules.models import Rule
+    from rsscore.rules.store import save_rule
+
+    _, cfg = hub
+    conn = open_db(cfg.db_path)
+    try:
+        rule = Rule.model_validate({
+            "name": "Leer noticia uno", "when": {
+                "all": [{"field": "title", "op": "contains", "value": "uno"}],
+            }, "then": [{"mark_read": True}],
+        })
+        save_rule(conn, rule)
+        respx.get("https://hub.example/feed").mock(return_value=httpx.Response(
+            200, content=FEED_XML, headers={"Content-Type": "application/rss+xml"},
+        ))
+        if operation == "add":
+            response = await http.post("/feeds", json={"url": "https://hub.example/feed"})
+        else:
+            feed = repo.add_feed(conn, Feed(url="https://hub.example/feed"))
+            path = f"/feeds/{feed.id}/refresh" if operation == "refresh_one" else "/feeds/refresh"
+            response = await http.post(path)
+        assert response.status_code in (200, 201), response.text
+        entries = repo.select_entries(conn, EntrySelection())
+        assert len(entries) == 2
+        for entry in entries:
+            assert repo.get_state(conn, entry.id).read == ("uno" in entry.title)
+    finally:
+        conn.close()

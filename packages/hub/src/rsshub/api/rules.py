@@ -3,20 +3,49 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from rsscore import repo
 from rsscore.models import EntrySelection
+from rsscore.rules.models import Rule
 
 from ..deps import bus, config, db, require_token, write_tx
 
 router = APIRouter(prefix="/rules", tags=["rules"], dependencies=[Depends(require_token)])
 
 
+class RulePreviewRequest(BaseModel):
+    rule: Rule
+    selection: EntrySelection = Field(default_factory=EntrySelection)
+    sample_size: int = Field(default=20, ge=1, le=100)
+
+
+@router.post("/preview")
+def preview_rule(req: RulePreviewRequest) -> dict:
+    """Prueba condiciones y ámbito sin guardar la regla ni ejecutar sus acciones."""
+    from rsscore.rules.engine import RuleEngine
+    from rsscore.rules.selection import rule_context
+
+    if not 1 <= req.selection.limit <= 5000 or req.selection.offset < 0:
+        raise HTTPException(422, "Revisa entre 1 y 5000 artículos con desplazamiento no negativo")
+    conn = db()
+    engine = RuleEngine([req.rule.model_copy(update={"enabled": True})])
+    entries = repo.select_entries(conn, req.selection)
+    matches = []
+    for entry in repo.iter_entries_with_body(conn, entries):
+        feed = repo.get_feed(conn, entry.feed_id)
+        if feed and engine.matching_conditions(entry, feed, **rule_context(conn, entry, feed)):
+            matches.append({"id": entry.id, "title": entry.title, "feed": feed.display_title})
+    return {
+        "revisadas": len(entries), "coincidencias": len(matches),
+        "muestra": matches[:req.sample_size],
+    }
+
+
 @router.get("")
 def list_rules() -> list[dict]:
     from rsscore.rules.store import load_rules
 
-    return [r.model_dump() for r in load_rules(db())]
+    return [r.model_dump() for r in load_rules(db(), include_disabled=True)]
 
 
 @router.put("/{rule_id}")

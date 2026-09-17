@@ -47,6 +47,7 @@ class Feed {
     this.customTitle,
     this.iconUrl,
     this.sourceKind = 'feed',
+    this.disabled = false,
     this.deleted = false,
     this.unread = 0,
   });
@@ -59,6 +60,7 @@ class Feed {
   final String? customTitle;
   final String? iconUrl;
   final String sourceKind;
+  final bool disabled;
   final bool deleted;
   final int unread;
 
@@ -78,6 +80,7 @@ class Feed {
         customTitle: j['custom_title'] as String?,
         iconUrl: j['icon_url'] as String?,
         sourceKind: (j['source_kind'] ?? 'feed') as String,
+        disabled: _bool(j['disabled']),
         deleted: _bool(j['deleted']),
         unread: (j['unread'] ?? 0) as int,
       );
@@ -91,6 +94,7 @@ class Feed {
         'custom_title': customTitle,
         'icon_url': iconUrl,
         'source_kind': sourceKind,
+        'disabled': disabled ? 1 : 0,
         'deleted': deleted ? 1 : 0,
       };
 }

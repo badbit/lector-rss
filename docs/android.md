@@ -4,7 +4,8 @@ Cliente **delgado**: no descarga feeds, no genera EPUB ni envía correos. Todo e
 vive en el hub. La app replica una ventana del archivo, la lee sin conexión y
 sincroniza el estado.
 
-Código en `mobile/`. Flutter 3.35 / Dart 3.9, `sqflite` con SQL directo.
+Código en `mobile/`. Flutter **3.47** o posterior / Dart 3.13, `sqflite` con SQL directo.
+El mínimo de Flutter corresponde al archivo `mobile/pubspec.lock`.
 
 ## Qué hay hecho
 
@@ -13,6 +14,7 @@ Código en `mobile/`. Flutter 3.35 / Dart 3.9, `sqflite` con SQL directo.
 | Conexión al hub | dirección + token, con prueba de conexión |
 | Arranque | `POST /sync/register` y `GET /sync/snapshot` |
 | Sincronización | `push` y `pull` con reloj por campo y cola de salida |
+| Artículos nuevos | altas paginadas después de la copia inicial, con cursor propio |
 | Navegación | carpetas, feeds y contadores de no leídos |
 | Lectura | lista paginada, artículo sin JavaScript, cuerpo cacheado |
 | Marcar | leído y guardado, con gestos en la lista |
@@ -34,7 +36,7 @@ export ANDROID_HOME="$HOME/Android/Sdk"
 export PATH="$HOME/.local/share/flutter/bin:$JAVA_HOME/bin:$ANDROID_HOME/platform-tools:$PATH"
 
 cd mobile
-flutter pub get
+flutter pub get --enforce-lockfile
 flutter test          # motor de sincronización, sin dispositivo
 flutter analyze
 flutter build apk --debug
@@ -104,6 +106,8 @@ Autenticación: `Authorization: Bearer <token>` con uno de los `hub.tokens`.
 
 3. **Reloj por campo, no por fila.** Si `read` y `starred` compartieran reloj, el
    orden de llegada decidiría cuál sobrevive y los dispositivos no convergerían.
+   El arranque importa también `field_clocks`; cada página posterior confirma
+   sus datos y ambos cursores en una sola transacción SQLite.
 
 4. **La cola local no se vacía hasta que el hub confirma.** Es lo que hace que un
    viaje en metro sin cobertura no pierda ningún «marcar como leído».
@@ -115,4 +119,8 @@ Autenticación: `Authorization: Bearer <token>` con uno de los `hub.tokens`.
 
 6. **Exportar a Obsidian se encola**, no se hace en el móvil: la bóveda está en el
    escritorio. `POST /export/obsidian` crea un trabajo con `target: desktop` que el
-   escritorio materializa al arrancar.
+   escritorio deberá recoger por HTTP. Actualmente su trabajador solo consulta
+   la cola local; conectar la cola remota sigue pendiente.
+
+El [contrato incremental](sincronizacion-incremental.md) detalla `entries_since`,
+la migración de la base móvil a versión 2 y la compatibilidad con hubs anteriores.

@@ -765,15 +765,24 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(mensaje, 6000)
 
     async def _revista(self) -> None:
+        from .digest import DigestDialog
+
+        dialog = DigestDialog(self.conn, self.cfg.magazine, self)
+        if not dialog.exec():
+            return
+        options = dialog.options()
         seleccion = self.modelo_lista.seleccion.model_copy()
-        seleccion.limit = self.cfg.magazine.max_articles
+        seleccion.limit = options.max_articles
         seleccion.offset = 0
         try:
-            ruta = await self.backend.generar_revista(seleccion)
+            ruta = await self.backend.generar_revista(
+                seleccion, magazine_cfg=options, send=dialog.send.isChecked(),
+            )
         except Exception as exc:
             QMessageBox.warning(self, "Revista EPUB", str(exc))
             return
-        self.statusBar().showMessage(f"Revista generada: {ruta}", 8000)
+        status = "Revista enviada al Kindle" if dialog.send.isChecked() else "Revista generada"
+        self.statusBar().showMessage(f"{status}: {ruta}", 8000)
         self.bandeja.avisar("Revista lista", ruta)
 
     # ---------------------------------------------------------------- bucles

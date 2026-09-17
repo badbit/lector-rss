@@ -56,6 +56,9 @@ class MagazineConfig(BaseModel):
     embed_images: bool = True
     max_image_width: int = 1200
     css: str | None = None
+    content_mode: Literal["full", "excerpt"] = "full"
+    excerpt_words: int = Field(default=180, ge=30, le=1000)
+    rules: list[str] = Field(default_factory=list)  # nombres o ids; unión de coincidencias
 
 
 class NotifyConfig(BaseModel):

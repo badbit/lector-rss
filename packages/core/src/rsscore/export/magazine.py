@@ -1,9 +1,9 @@
-"""Revista periódica: un EPUB con lo que haya entrado desde la última vez.
+"""Revista EPUB construida bajo demanda a partir de una selección.
 
 Es el mismo motor que el envío a Kindle, con dos diferencias: se resuelve una
 `EntrySelection` en lugar de una lista de identificadores, y el resultado se
-escribe en disco con nombre fechado (`revista-2026-08-19.epub`) para que la
-biblioteca del lector quede ordenada sola y las ediciones no se pisen.
+escribe en disco con nombre fechado. No lleva un cursor de última edición ni
+programa envíos por sí misma.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ from typing import Any
 
 from .. import repo
 from ..config import MagazineConfig, data_home
+from ..ids import new_id
 from ..models import Entry, EntrySelection
 from .epub import (
     EpubArticle,
@@ -96,6 +97,8 @@ def build_magazine(
             client=client,
             embed_images=cfg.embed_images,
             max_image_width=cfg.max_image_width,
+            content_mode=cfg.content_mode,
+            excerpt_words=cfg.excerpt_words,
         )
     )
 
@@ -121,9 +124,22 @@ def build_magazine(
         date=hoy,
     )
 
-    destino = _resolve_path(out_path or cfg.output_dir, hoy)
+    requested = out_path or cfg.output_dir
+    destino = _resolve_path(requested, hoy)
     destino.parent.mkdir(parents=True, exist_ok=True)
-    destino.write_bytes(datos)
+    automatic = (requested is None or Path(requested).expanduser().is_dir()
+                 or Path(requested).suffix.lower() != ".epub")
+    if automatic:
+        base = destino
+        while True:
+            try:
+                with destino.open("xb") as output:
+                    output.write(datos)
+                break
+            except FileExistsError:
+                destino = base.with_stem(f"{base.stem}-{new_id()}")
+    else:
+        destino.write_bytes(datos)
 
     return MagazineResult(
         path=destino,
@@ -147,7 +163,12 @@ def _pick(
     sel = selection.model_copy()
     if cfg.max_articles > 0:
         sel.limit = min(sel.limit or cfg.max_articles, cfg.max_articles)
-    entradas = repo.select_entries(conn, sel)
+    if cfg.rules:
+        from ..rules.selection import resolve_rules, select_by_rules
+
+        entradas = select_by_rules(conn, sel, resolve_rules(conn, cfg.rules))
+    else:
+        entradas = repo.select_entries(conn, sel)
     if cfg.max_articles > 0:
         entradas = entradas[: cfg.max_articles]
     return list(repo.iter_entries_with_body(conn, entradas))

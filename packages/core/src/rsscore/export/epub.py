@@ -24,14 +24,15 @@ import sqlite3
 import unicodedata
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, fields
+from html import escape
 from io import BytesIO
 from typing import Any
+from uuid import uuid4
 
 from bs4 import BeautifulSoup
 from ebooklib import epub as _epub
 
 from .. import repo
-from ..ids import new_id
 from ..models import Entry
 from ._render import asset, render
 from .html import ImageAsset, clean_article_html, count_words, fetch_images, text_from_html
@@ -253,7 +254,7 @@ def build_epub(
     hoy = date or dt.date.today()
 
     book = _epub.EpubBook()
-    book.set_identifier(identifier or f"urn:uuid:rsscore-{new_id()}")
+    book.set_identifier(identifier or uuid4().urn)
     book.set_title(title)
     book.set_language(language)
     book.add_author(author)
@@ -457,6 +458,8 @@ async def articles_from_entries(
     embed_images: bool = True,
     max_image_width: int = 1200,
     section_of: Callable[[Entry, str], str] | None = None,
+    content_mode: str = "full",
+    excerpt_words: int = 180,
 ) -> list[EpubArticle]:
     """Convierte entradas de la base en artículos listos para el EPUB.
 
@@ -472,10 +475,24 @@ async def articles_from_entries(
             titulos[entry.feed_id] = feed.display_title if feed else ""
         feed_title = titulos[entry.feed_id]
 
-        html = entry.body_html
-        if html is None:
-            html, _ = repo.get_body(conn, entry.id)
-        html = clean_article_html(html or entry.summary or "", base_url=entry.url)
+        html, text = entry.body_html, entry.body_text
+        if html is None and text is None:
+            html, text = repo.get_body(conn, entry.id)
+        if content_mode == "excerpt":
+            summary = text_from_html(entry.summary or "").strip()
+            source = summary or text or text_from_html(html or "")
+            words = source.split()
+            excerpt = " ".join(words[:excerpt_words])
+            if len(words) > excerpt_words:
+                excerpt += "…"
+            label = "Extracto del feed" if summary else "Extracto del artículo"
+            html = (
+                f"<p><em>{label}</em></p><p>{escape(excerpt)}</p>" if excerpt
+                else "<p>No hay texto disponible para preparar un extracto.</p>"
+            )
+        else:
+            html = html or (f"<p>{escape(text)}</p>" if text else entry.summary or "")
+        html = clean_article_html(html, base_url=entry.url)
 
         imagenes: list[ImageAsset] = []
         if embed_images and "<img" in html:

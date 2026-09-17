@@ -25,9 +25,17 @@ class AppDatabase {
     ruta ??= p.join(await getDatabasesPath(), nombre);
     final db = await openDatabase(
       ruta,
-      version: 1,
+      version: 2,
       onConfigure: (d) async => d.execute('PRAGMA foreign_keys = ON'),
       onCreate: _crear,
+      onUpgrade: (db, oldVersion, newVersion) async {
+        if (oldVersion < 2) {
+          await db.execute(
+              'ALTER TABLE node ADD COLUMN entries_cursor INTEGER NOT NULL DEFAULT 0');
+          await db.execute(
+              'ALTER TABLE feeds ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0');
+        }
+      },
     );
     final instancia = AppDatabase._(db);
     await instancia._asegurarNodo();
@@ -42,7 +50,8 @@ class AppDatabase {
       '''CREATE TABLE feeds (
            id TEXT PRIMARY KEY, folder_id TEXT, url TEXT NOT NULL, site_url TEXT,
            title TEXT NOT NULL DEFAULT '', custom_title TEXT, icon_url TEXT,
-           source_kind TEXT NOT NULL DEFAULT 'feed', deleted INTEGER NOT NULL DEFAULT 0)''',
+           source_kind TEXT NOT NULL DEFAULT 'feed', deleted INTEGER NOT NULL DEFAULT 0,
+           disabled INTEGER NOT NULL DEFAULT 0)''',
       '''CREATE TABLE entries (
            id TEXT PRIMARY KEY, feed_id TEXT NOT NULL, url TEXT,
            title TEXT NOT NULL DEFAULT '', author TEXT, summary TEXT,
@@ -85,7 +94,8 @@ class AppDatabase {
            UNIQUE (entity, entity_id, field, device_id, lamport))''',
       '''CREATE TABLE node (
            id INTEGER PRIMARY KEY CHECK (id = 1), device_id TEXT NOT NULL,
-           lamport INTEGER NOT NULL DEFAULT 0, last_pull_seq INTEGER NOT NULL DEFAULT 0)''',
+           lamport INTEGER NOT NULL DEFAULT 0, last_pull_seq INTEGER NOT NULL DEFAULT 0,
+           entries_cursor INTEGER NOT NULL DEFAULT 0)''',
     ];
     for (final sentencia in sentencias) {
       await db.execute(sentencia);
@@ -155,7 +165,8 @@ class AppDatabase {
       ]) {
         await txn.delete(tabla);
       }
-      await txn.update('node', {'last_pull_seq': 0}, where: 'id = 1');
+      await txn.update('node', {'last_pull_seq': 0, 'entries_cursor': 0},
+          where: 'id = 1');
     });
   }
 }

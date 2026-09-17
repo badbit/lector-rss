@@ -1,13 +1,10 @@
 """Envío de artículos al Kindle por correo (Send to Kindle).
 
-**Se envía EPUB, nunca MOBI.** Amazon retiró el MOBI de Send-to-Kindle en 2022;
-desde entonces el servicio acepta EPUB, PDF, DOCX, TXT, RTF y HTML, y convierte
-el EPUB a su formato interno (KFX) en el propio dispositivo. Generar un MOBI hoy
-solo consigue que el correo rebote, así que aquí no hay ninguna ruta que lo
-produzca ni dependencia de KindleGen o Calibre.
+Se utiliza EPUB, incluido en los formatos admitidos por Send to Kindle:
+https://digprjsurvey.amazon.co.uk/csad/help/node/G5WYD9SAF7PGXRNA
+No se genera MOBI ni se requiere KindleGen o Calibre.
 
-Requisitos del lado de Amazon que no se pueden comprobar desde aquí y que son la
-causa del 90 % de los fallos:
+Configuración que debe comprobarse fuera de la aplicación:
 
 1. la dirección de `smtp.from_address` tiene que estar dada de alta en la lista
    de remitentes aprobados de la cuenta (Gestionar contenido y dispositivos →
@@ -93,6 +90,8 @@ async def send_to_kindle(
         entradas,
         embed_images=cfg.embed_images,
         max_image_width=cfg.max_image_width,
+        content_mode=cfg.content_mode,
+        excerpt_words=cfg.excerpt_words,
     )
     asunto = title or cfg.title or "Artículos"
     lotes = split_batches(articulos)

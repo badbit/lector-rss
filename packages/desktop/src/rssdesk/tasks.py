@@ -201,10 +201,20 @@ class Backend:
         await send_to_kindle(self.conn, entry_ids, self.cfg.smtp)
         return f"{len(entry_ids)} artículos enviados al Kindle"
 
-    async def generar_revista(self, seleccion) -> str:
+    async def generar_revista(self, seleccion, *, magazine_cfg=None, send=False) -> str:
         from rsscore.export.magazine import build_magazine
 
-        resultado = await asyncio.to_thread(build_magazine, self.conn, seleccion, self.cfg.magazine)
+        cfg = magazine_cfg or self.cfg.magazine
+        resultado = await asyncio.to_thread(build_magazine, self.conn, seleccion, cfg)
+        if send:
+            from rsscore.export.kindle import send_epub_file
+
+            try:
+                await send_epub_file(resultado.path, self.cfg.smtp, title=cfg.title)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"El EPUB se guardó en {resultado.path}, pero el envío falló: {exc}"
+                ) from exc
         return str(getattr(resultado, "path", resultado))
 
     # ------------------------------------------------ cola de exportaciones

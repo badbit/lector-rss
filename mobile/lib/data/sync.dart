@@ -51,14 +51,21 @@ class SyncEngine {
     required this.repo,
     required this.client,
     this.scope = const SyncScope(),
-  });
+  }) : _executor = null;
+
+  SyncEngine._inTransaction(SyncEngine source, this._executor)
+      : app = source.app,
+        repo = source.repo,
+        client = source.client,
+        scope = source.scope;
 
   final AppDatabase app;
   final Repo repo;
   final HubClient client;
   final SyncScope scope;
 
-  Database get db => app.db;
+  final DatabaseExecutor? _executor;
+  DatabaseExecutor get db => _executor ?? app.db;
 
   // ==================================================================== ciclo
   Future<SyncStats> syncOnce({String nombre = 'móvil'}) async {
@@ -95,7 +102,7 @@ class SyncEngine {
   Future<void> _bootstrap(String deviceId) async {
     final foto = await client.snapshot(deviceId, days: scope.days);
 
-    await db.transaction((txn) async {
+    await app.db.transaction((txn) async {
       await _volcar(
           txn, 'folders', foto['folders'], (j) => Folder.fromJson(j).toRow());
       await _volcar(
@@ -144,12 +151,25 @@ class SyncEngine {
                 'tag_id': j['tag_id'],
                 'deleted': _entero(j['deleted']),
               });
+      await _volcar(
+          txn,
+          'field_clock',
+          foto['field_clocks'],
+          (j) => {
+                'entity': j['entity'],
+                'entity_id': j['entity_id'],
+                'field': j['field'],
+                'lamport': j['lamport'],
+                'device_id': j['device_id'],
+              });
+      await txn
+          .rawUpdate('''UPDATE node SET last_pull_seq = ?, entries_cursor = ?,
+        lamport = MAX(lamport, ?) WHERE id = 1''', [
+        foto['cursor'] ?? 0,
+        foto['entries_cursor'] ?? 0,
+        foto['server_lamport'] ?? 0,
+      ]);
     });
-
-    await app.setCursor((foto['cursor'] ?? 0) as int);
-    if (foto['server_lamport'] != null) {
-      await app.observeLamport(foto['server_lamport'] as int);
-    }
   }
 
   Future<void> _volcar(
@@ -192,17 +212,46 @@ class SyncEngine {
 
     while (true) {
       final desde = await app.cursor();
-      final respuesta = await client.pull(deviceId, desde);
+      final node = (await db.query('node', where: 'id = 1')).first;
+      final respuesta = await client.pull(deviceId, desde,
+          entriesSince: node['entries_cursor'] as int);
 
-      if (respuesta.ops.isNotEmpty) {
-        final r = await applyOps(respuesta.ops);
+      await app.db.transaction((txn) async {
+        final worker = SyncEngine._inTransaction(this, txn);
+        await worker.applyOps(respuesta.dependencies);
+        for (final entry in respuesta.entries) {
+          await txn.insert(
+              'entries',
+              {
+                'id': entry.id,
+                'feed_id': entry.feedId,
+                'url': entry.url,
+                'title': entry.title,
+                'author': entry.author,
+                'summary': entry.summary,
+                'published_at': entry.publishedAt,
+                'has_body': 0,
+              },
+              conflictAlgorithm: ConflictAlgorithm.ignore);
+          await txn.insert('entry_state', {'entry_id': entry.id},
+              conflictAlgorithm: ConflictAlgorithm.ignore);
+        }
+        final r =
+            await worker.applyOps([...respuesta.ops, ...respuesta.entryOps]);
         descargadas += respuesta.ops.length;
         aplicadas += r.applied;
         descartadas += r.ignored;
         aparcadas += r.pending;
-      }
-      await app.setCursor(respuesta.cursor);
-      if (!respuesta.hasMore) break;
+        await txn.rawUpdate(
+            '''UPDATE node SET last_pull_seq = MAX(last_pull_seq, ?),
+          entries_cursor = MAX(entries_cursor, ?), lamport = MAX(lamport, ?) WHERE id = 1''',
+            [
+              respuesta.cursor,
+              respuesta.entriesCursor,
+              respuesta.serverLamport
+            ]);
+      });
+      if (!respuesta.hasMore && !respuesta.entriesHasMore) break;
     }
     return (
       downloaded: descargadas,
@@ -218,7 +267,9 @@ class SyncEngine {
     var aplicadas = 0, descartadas = 0, aparcadas = 0;
 
     for (final op in ops) {
-      await app.observeLamport(op.lamport);
+      await db.rawUpdate(
+          'UPDATE node SET lamport = MAX(lamport, ?) + 1 WHERE id = 1',
+          [op.lamport]);
       final resultado = await _aplicarUna(op);
       switch (resultado) {
         case 'applied':

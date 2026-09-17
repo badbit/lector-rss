@@ -714,7 +714,7 @@ def get_body(conn: sqlite3.Connection, entry_id: str) -> tuple[str | None, str |
 def select_entries(conn: sqlite3.Connection, sel: EntrySelection) -> list[Entry]:
     """Resuelve una selección (la usan la UI, las revistas y las exportaciones)."""
     sql = [
-        "SELECT e.* FROM entries e",
+        "SELECT DISTINCT e.* FROM entries e",
         "JOIN entry_state s ON s.entry_id = e.id",
     ]
     where, params = ["1=1"], []
@@ -731,6 +731,8 @@ def select_entries(conn: sqlite3.Connection, sel: EntrySelection) -> list[Entry]
             folders,
         ).fetchall()
         feed_ids += [r["id"] for r in rows]
+        if not feed_ids:
+            return []
     if feed_ids:
         where.append(f"e.feed_id IN ({','.join('?' * len(feed_ids))})")
         params += feed_ids
@@ -756,7 +758,7 @@ def select_entries(conn: sqlite3.Connection, sel: EntrySelection) -> list[Entry]
         params.append(sel.until)
 
     query = " ".join(sql) + " WHERE " + " AND ".join(where)
-    query += " ORDER BY e.published_at DESC LIMIT ? OFFSET ?"
+    query += " ORDER BY e.published_at DESC, e.id LIMIT ? OFFSET ?"
     params.append(sel.limit)
     params.append(sel.offset)
     return [_entry(r) for r in conn.execute(query, params)]
@@ -975,6 +977,11 @@ def finish_export(
             job_id,
         ),
     )
+
+
+def get_export(conn: sqlite3.Connection, job_id: str) -> ExportJob | None:
+    row = conn.execute("SELECT * FROM export_jobs WHERE id = ?", (job_id,)).fetchone()
+    return _job(row) if row else None
 
 
 def list_exports(conn: sqlite3.Connection, limit: int = 50) -> list[ExportJob]:

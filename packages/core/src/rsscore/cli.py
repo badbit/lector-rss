@@ -461,6 +461,69 @@ def cmd_rules(args) -> int:
     return 0
 
 
+def cmd_digest(args) -> int:
+    """Revista filtrada: primero puede revisarse, luego generarse y enviarse."""
+    from .export.kindle import KindleError, send_epub_file
+    from .export.magazine import _pick, build_magazine
+    from .ids import now_ms
+
+    conn, cfg = _conn(args)
+    try:
+        mag = cfg.magazine.model_copy()
+        if args.title:
+            mag.title = args.title
+        if args.rule:
+            mag.rules = args.rule
+        if args.brief:
+            mag.content_mode = "excerpt"
+        if args.words is not None:
+            mag.excerpt_words = args.words
+        if args.limit is not None:
+            mag.max_articles = args.limit
+        mag = type(mag).model_validate(mag.model_dump())
+
+        def resolve(references, objects):
+            ids = []
+            for ref in references:
+                found = [o for o in objects if o.id == ref] or [o for o in objects if o.name == ref]
+                if len(found) != 1:
+                    raise ValueError(f"Nombre inexistente o ambiguo: {ref}; usa su id")
+                ids.append(found[0].id)
+            return ids
+
+        selection = EntrySelection(
+            tag_ids=resolve(args.tag, repo.list_tags(conn)),
+            folder_ids=resolve(args.folder, repo.list_folders(conn)),
+            unread_only=args.unread, starred_only=args.starred,
+            since=now_ms() - args.days * 86_400_000 if args.days else None,
+            limit=mag.max_articles,
+        )
+        if args.preview:
+            entries = _pick(conn, selection, mag)
+            for entry in entries:
+                print(f"{entry.id}  {entry.title}")
+            print(f"{len(entries)} artículos seleccionados")
+            return 0
+        result = build_magazine(conn, selection, mag, out_path=args.out)
+        print(f"Revista generada: {result.path} ({result.articles} artículos)")
+        if args.send_to_kindle:
+            asyncio.run(send_epub_file(result.path, cfg.smtp, title=mag.title))
+            print("EPUB enviado por correo al Kindle")
+        return 0
+    except (ValueError, KindleError, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    finally:
+        conn.close()
+
+
+def _positive_int(value: str) -> int:
+    number = int(value)
+    if number <= 0:
+        raise argparse.ArgumentTypeError("debe ser mayor que cero")
+    return number
+
+
 def cmd_backfill(args) -> int:
     """Aplica las reglas a lo ya descargado.
 
@@ -641,6 +704,24 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("ids", nargs="*")
     s.add_argument("--unread", action="store_true", help="revista con lo no leído")
     s.set_defaults(func=cmd_export)
+
+    s = sub.add_parser("digest", help="revista EPUB seleccionada por reglas, etiquetas o carpetas")
+    s.add_argument("--rule", action="append", default=[], help="regla por nombre o id; repetible")
+    s.add_argument("--tag", action="append", default=[], help="etiqueta por nombre o id; repetible")
+    s.add_argument(
+        "--folder", action="append", default=[], help="carpeta por nombre o id; repetible",
+    )
+    s.add_argument("--days", type=_positive_int, help="artículos de los últimos N días")
+    s.add_argument("--limit", type=_positive_int, help="máximo de artículos coincidentes")
+    s.add_argument("--unread", action="store_true")
+    s.add_argument("--starred", action="store_true")
+    s.add_argument("--brief", action="store_true", help="extractos del texto fuente, sin IA")
+    s.add_argument("--words", type=_positive_int, help="palabras por extracto: entre 30 y 1000")
+    s.add_argument("--title", help="título de la revista")
+    s.add_argument("--out", type=Path, help="archivo EPUB o carpeta de salida")
+    s.add_argument("--preview", action="store_true", help="mostrar selección sin generar ni enviar")
+    s.add_argument("--send-to-kindle", action="store_true", help="enviar el EPUB por SMTP")
+    s.set_defaults(func=cmd_digest)
 
     s = sub.add_parser("rules", help="gestionar reglas de filtrado")
     s.add_argument("action", choices=["list", "import", "export"])

@@ -355,13 +355,21 @@ def test_epub_pasa_epubcheck_si_esta_instalado(conn, tmp_path: Path):
     binario = shutil.which("epubcheck")
     if not binario:
         pytest.skip("epubcheck no está instalado en el sistema")
+    comando = [binario]
+    # En Debian puede ser un enlace al JAR. Ejecutarlo directamente depende
+    # de binfmt/jarwrapper, que no siempre está disponible en el entorno.
+    if Path(binario).resolve().suffix == ".jar":
+        java = shutil.which("java")
+        if not java:
+            pytest.skip("epubcheck necesita Java y no está disponible")
+        comando = [java, "-jar", binario]
 
     _revista_de_prueba(conn)
     resultado = build_magazine(
         conn, EntrySelection(limit=50), MagazineConfig(), out_path=tmp_path
     )
     proceso = subprocess.run(
-        [binario, str(resultado.path)], capture_output=True, text=True, check=False
+        [*comando, str(resultado.path)], capture_output=True, text=True, check=False
     )
     assert proceso.returncode == 0, proceso.stdout + proceso.stderr
 

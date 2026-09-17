@@ -149,6 +149,11 @@ class PullResponse(BaseModel):
     cursor: int = 0
     has_more: bool = False
     server_lamport: int = 0
+    entries: list[Entry] = Field(default_factory=list)
+    dependencies: list[ChangeOp] = Field(default_factory=list)
+    entry_ops: list[ChangeOp] = Field(default_factory=list)
+    entries_cursor: int = 0
+    entries_has_more: bool = False
 
 
 class PushRequest(BaseModel):
