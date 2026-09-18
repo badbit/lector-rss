@@ -87,13 +87,32 @@ menús freedesktop), ejecuta desde este repositorio:
 El acceso aparece como **Internet → Lector RSS** y usa el Python del entorno
 actual. Si mueves el repositorio o cambias de entorno, repite el instalador.
 El icono adapta el símbolo RSS de Lucide/Feather, y los íconos de la barra de
-herramientas y de los menús son de Lucide; sus licencias ISC/MIT están
+herramientas y de los menús pueden ser de Lucide o Tango; sus licencias están
 incluidas en `packages/desktop/src/rssdesk/assets/LICENSE-icons.txt`.
 
 En el escritorio, **Ver → Barra de herramientas** (o clic derecho sobre la
 barra) elige entre solo texto, texto e íconos o solo íconos; la elección se
 guarda en `desktop.toolbar_style`. Al pasar el ratón por un botón aparece qué
 hace y su atajo.
+
+**Ver → Tema de íconos → Monocromo / Color** cambia al instante los íconos de
+la barra y los menús, y guarda la elección en `desktop.icon_theme` (`monochrome`
+o `color`). Monocromo usa Lucide y sigue el color del texto del tema claro u
+oscuro; Color usa una selección de Tango 0.8.90 (dominio público), incluida en la
+aplicación para que funcione también sin Linux Mint. No cambia el tema del
+escritorio ni el logotipo de la aplicación.
+
+Las fuentes se organizan en carpetas y subcarpetas. Con clic derecho en el
+panel de suscripciones puedes crear una carpeta en la raíz, crear una
+subcarpeta, renombrar y mover fuentes o carpetas; los destinos muestran su
+ruta completa. Una carpeta no puede moverse dentro de sus propias subcarpetas.
+
+El clic derecho en un artículo permite enviarlo a Obsidian o Kindle, marcarlo
+como leído o no leído, guardarlo y **mover toda su fuente** a una carpeta.
+Las opciones también admiten varias entradas seleccionadas. Al leer un artículo
+se actualizan la vista «Sin leer» y los contadores, conservando abierto su texto.
+La barra de estado muestra permanentemente los totales del archivo: entradas,
+leídas, no leídas y guardadas.
 
 `rss show ID` descarga el cuerpo desde el hub si falta; `--offline` usa solo lo
 local. Consultar no cambia el estado: añade `--mark-read` para marcarlo leído.

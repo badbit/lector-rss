@@ -213,6 +213,25 @@ def rename_folder(conn: sqlite3.Connection, folder_id: str, name: str) -> None:
     append_change(conn, Entity.FOLDER, folder_id, "name", name, lamport=lam)
 
 
+def move_folder(conn: sqlite3.Connection, folder_id: str, parent_id: str | None) -> None:
+    """Mueve una carpeta conservando su contenido y evitando ciclos."""
+    folder = get_folder(conn, folder_id)
+    if folder is None or folder.deleted:
+        raise ValueError("La carpeta ya no existe")
+    if parent_id is not None:
+        parent = get_folder(conn, parent_id)
+        if parent is None or parent.deleted:
+            raise ValueError("La carpeta de destino ya no existe")
+        if parent_id in descendant_folder_ids(conn, [folder_id]):
+            raise ValueError("No se puede mover una carpeta dentro de sí misma o sus subcarpetas")
+    lam = tick_lamport(conn)
+    conn.execute(
+        "UPDATE folders SET parent_id = ?, lamport = ?, device_id = ?, updated_at = ? "
+        "WHERE id = ?", (parent_id, lam, device_id(conn), now_ms(), folder_id),
+    )
+    append_change(conn, Entity.FOLDER, folder_id, "parent_id", parent_id, lamport=lam)
+
+
 def delete_folder(conn: sqlite3.Connection, folder_id: str) -> None:
     """Retira una carpeta sin borrar sus feeds ni sus subcarpetas."""
     for row in conn.execute("SELECT id FROM feeds WHERE folder_id = ?", (folder_id,)).fetchall():

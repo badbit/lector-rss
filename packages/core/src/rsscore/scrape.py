@@ -350,6 +350,12 @@ def watch_page(
 # ====================================================== detección de selectores
 _CONTENEDORES = ("article", "li", "div", "section", "tr")
 _TITULO = ("h1", "h2", "h3", "h4", ".title", ".entry-title", ".post-title")
+_FECHA = ("time", ".post-date", ".entry-date", ".published", '[itemprop="datePublished"]')
+_RESUMEN = (".entry-summary > p", ".entry-summary", ".excerpt", ".summary", ".description")
+_ZONAS_AJENAS = (
+    "nav, aside, footer, [role=navigation], [role=complementary], "
+    ".sidebar, #sidebar, .widget, .blogroll, .menu, .pagination, .site-header, .site-footer"
+)
 
 
 def guess_selectors(html: str, base_url: str = "", *, limit: int = 4) -> list[ScrapeCandidate]:
@@ -360,9 +366,16 @@ def guess_selectors(html: str, base_url: str = "", *, limit: int = 4) -> list[Sc
     """
     soup = BeautifulSoup(html or "", "html.parser")
     grupos: dict[str, list[Tag]] = {}
+    ajenos = {
+        id(nodo)
+        for zona in soup.select(_ZONAS_AJENAS)
+        for nodo in [zona, *zona.find_all(_CONTENEDORES)]
+    }
 
     for etiqueta in _CONTENEDORES:
         for elemento in soup.find_all(etiqueta):
+            if id(elemento) in ajenos:
+                continue
             clave = _firma(elemento)
             if clave:
                 grupos.setdefault(clave, []).append(elemento)
@@ -374,12 +387,20 @@ def guess_selectors(html: str, base_url: str = "", *, limit: int = 4) -> list[Sc
         puntos, muestra = _puntuar(elementos, base_url)
         if puntos <= 0:
             continue
+        # El selector guardado se ejecuta sobre el HTML completo, no sobre una
+        # copia sin laterales: excluir también allí las tarjetas de navegación.
+        if any(id(e) in ajenos for e in soup.select(selector)):
+            selector += f":not(:is({_ZONAS_AJENAS}), :is({_ZONAS_AJENAS}) *)"
+        titulo = _mejor_titulo(elementos)
+        enlace = f"{titulo} a[href]" if titulo else ""
         candidatos.append(
             ScrapeCandidate(
                 config=ScrapeConfig(
                     item_selector=selector,
-                    title_selector=_mejor_titulo(elementos),
-                    date_selector="time" if _tiene(elementos, "time") else "",
+                    title_selector=titulo,
+                    link_selector=enlace if enlace and _tiene(elementos, enlace) else "",
+                    date_selector=_mejor_campo(elementos, _FECHA),
+                    summary_selector=_mejor_campo(elementos, _RESUMEN),
                 ),
                 score=puntos,
                 count=len(elementos),
@@ -394,6 +415,10 @@ def guess_selectors(html: str, base_url: str = "", *, limit: int = 4) -> list[Sc
 def _firma(elemento: Tag) -> str:
     """Selector que identifica a un elemento y a sus hermanos del mismo tipo."""
     clases = [c for c in (elemento.get("class") or []) if not _clase_ruidosa(c)]
+    if elemento.name == "article":
+        # WordPress mezcla clases estables con categorías y el ID de cada post.
+        # No dividir un mismo listado en grupos según su tema o identificador.
+        return "article.post" if "post" in clases else "article"
     if clases:
         return f"{elemento.name}." + ".".join(sorted(clases)[:2])
     padre = elemento.parent
@@ -434,7 +459,7 @@ def _titulo_de(elemento: Tag) -> str:
 
 
 def _puntuar(elementos: list[Tag], base_url: str) -> tuple[float, list[str]]:
-    con_enlace = con_titulo = con_fecha = 0
+    con_enlace = con_titulo = con_fecha = con_cabecera = con_articulo = con_resumen = 0
     muestra: list[str] = []
     for elemento in elementos[:20]:
         if elemento.find("a", href=True):
@@ -444,14 +469,28 @@ def _puntuar(elementos: list[Tag], base_url: str) -> tuple[float, list[str]]:
             con_titulo += 1
             if len(muestra) < 3:
                 muestra.append(titulo)
-        if elemento.find("time"):
+        if any(elemento.select_one(s) is not None for s in _FECHA):
             con_fecha += 1
+        if any(
+            (nodo := elemento.select_one(s)) is not None
+            and _titulo_plausible(nodo.get_text(" ", strip=True))
+            for s in _TITULO
+        ):
+            con_cabecera += 1
+        if elemento.name == "article" or elemento.find("article"):
+            con_articulo += 1
+        if any(elemento.select_one(s) is not None for s in _RESUMEN):
+            con_resumen += 1
 
     total = min(len(elementos), 20)
     if not total or not con_titulo:
         return 0.0, muestra
-    puntos = (con_enlace / total) * 2 + (con_titulo / total) * 3 + (con_fecha / total)
-    puntos *= min(len(elementos), 30) / 30 + 0.5     # premia listados largos
+    puntos = (
+        con_enlace * 2 + con_titulo * 3 + con_cabecera * 3
+        + con_articulo * 2 + con_fecha * 2 + con_resumen
+    ) / total
+    # La cantidad desempata; no debe superar las señales de contenido editorial.
+    puntos += min(len(elementos), 30) / 60
     return puntos, muestra
 
 
@@ -468,8 +507,14 @@ def _mejor_titulo(elementos: list[Tag]) -> str:
     return ""
 
 
-def _tiene(elementos: list[Tag], etiqueta: str) -> bool:
-    return sum(1 for e in elementos[:10] if e.find(etiqueta)) >= 2
+def _tiene(elementos: list[Tag], selector: str) -> bool:
+    return sum(1 for e in elementos[:10] if e.select_one(selector) is not None) >= max(
+        2, (len(elementos[:10]) + 1) // 2
+    )
+
+
+def _mejor_campo(elementos: list[Tag], selectores: tuple[str, ...]) -> str:
+    return next((s for s in selectores if _tiene(elementos, s)), "")
 
 
 # ==================================================================== fachada

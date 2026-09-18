@@ -7,11 +7,11 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
 import yaml
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QPalette
+from PySide6.QtGui import QColor, QIcon, QPalette
 from PySide6.QtWidgets import QApplication, QToolButton
 from rsscore.config import Config
 from rsscore.db import open_db
-from rssdesk.icons import action_icon
+from rssdesk.icons import ACTION_ICONS_DIR, COLOR_ICONS_DIR, action_icon
 from rssdesk.main import MainWindow
 
 
@@ -100,3 +100,61 @@ def test_el_aspecto_de_la_barra_se_elige_y_se_guarda(crear_ventana):
 def test_solo_texto_desde_la_configuracion(crear_ventana):
     ventana = crear_ventana(Config(desktop={"toolbar_style": "text"}))
     assert ventana.barra.toolButtonStyle() == Qt.ToolButtonStyle.ToolButtonTextOnly
+
+
+def test_el_tema_cambia_todas_las_acciones_y_se_guarda(crear_ventana):
+    ventana = crear_ventana()
+    ventana.config_path.write_text(
+        "device_name: pruebas\ndesktop:\n  toolbar_style: icons\n", encoding="utf-8"
+    )
+    acciones = ventana._acciones_con_icono + list(ventana.bandeja._acciones_con_icono)
+    originales = [a.icon().pixmap(24, 24).toImage() for a, _ in acciones]
+    color = next(a for a in ventana.temas_iconos.actions() if a.data() == "color")
+    color.trigger()
+    assert color.isChecked()
+    assert sum(a.isChecked() for a in ventana.temas_iconos.actions()) == 1
+    for (accion, nombre), original in zip(acciones, originales, strict=True):
+        actual = accion.icon().pixmap(24, 24).toImage()
+        assert actual != original, nombre
+        assert actual == action_icon(nombre, "color").pixmap(24, 24).toImage()
+    data = yaml.safe_load(ventana.config_path.read_text(encoding="utf-8"))
+    assert data == {
+        "device_name": "pruebas",
+        "desktop": {"toolbar_style": "icons", "icon_theme": "color"},
+    }
+    otra = crear_ventana(Config.load(ventana.config_path))
+    assert otra.temas_iconos.checkedAction().data() == "color"
+    assert otra.barra.toolButtonStyle() == Qt.ToolButtonStyle.ToolButtonIconOnly
+    for accion, nombre in otra._acciones_con_icono + list(otra.bandeja._acciones_con_icono):
+        assert accion.icon().pixmap(24, 24).toImage() == (
+            action_icon(nombre, "color").pixmap(24, 24).toImage()
+        )
+    mono = next(a for a in ventana.temas_iconos.actions() if a.data() == "monochrome")
+    mono.trigger()
+    for (accion, _), original in zip(acciones, originales, strict=True):
+        assert accion.icon().pixmap(24, 24).toImage() == original
+    assert Config.load(ventana.config_path).desktop.icon_theme == "monochrome"
+
+
+def test_todos_los_iconos_color_estan_empaquetados_y_se_dibujan(app, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    for path in ACTION_ICONS_DIR.glob("*.svg"):
+        icon = action_icon(path.stem, "color")
+        assert (COLOR_ICONS_DIR / f"{path.stem}.svg").is_file()
+        for size in (16, 24, 48):
+            for mode in (QIcon.Mode.Normal, QIcon.Mode.Disabled, QIcon.Mode.Selected):
+                img = icon.pixmap(size, size, mode).toImage()
+                assert not img.isNull()
+                assert any(
+                    img.pixelColor(x, y).alpha() for x in range(size) for y in range(size)
+                )
+    img = action_icon("refresh-cw", "color").pixmap(24, 24).toImage()
+    assert any(img.pixelColor(x, y).saturation() > 80 for x in range(24) for y in range(24))
+
+
+def test_color_recurre_a_monocromo_si_falta_un_recurso(app, tmp_path, monkeypatch):
+    monkeypatch.setattr("rssdesk.icons.COLOR_ICONS_DIR", tmp_path)
+    assert action_icon("refresh-cw", "color").pixmap(24, 24).toImage() == (
+        action_icon("refresh-cw").pixmap(24, 24).toImage()
+    )
+    assert action_icon("no-existe", "color").isNull()

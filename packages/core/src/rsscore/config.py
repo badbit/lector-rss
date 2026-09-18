@@ -85,6 +85,7 @@ class DesktopConfig(BaseModel):
 
     fetch_locally: bool | None = None
     toolbar_style: Literal["text", "text_and_icons", "icons"] = "text_and_icons"
+    icon_theme: Literal["monochrome", "color"] = "monochrome"
 
 
 class Config(BaseModel):

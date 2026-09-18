@@ -64,6 +64,72 @@ def test_detecta_paginas_que_necesitan_javascript():
     assert looks_javascript_rendered(fixture("blog_sin_feed.html")) is False
 
 
+def listado_tipo_wellesnet() -> str:
+    """Estructura mínima observada en Wellesnet, con contenido de prueba."""
+    articulos = "".join(
+        f'<div class="recent_articles"><article class="post-{i + 1000} post '
+        f'type-post hentry category-tema-{i}">'
+        f'<header class="entry-header"><h4><a href="/noticia-{i}" rel="bookmark">'
+        f'Noticia sobre cine número {i}</a></h4></header>'
+        f'<div class="entry-summary"><p>Resumen de la noticia {i}.</p>'
+        f'<div class="post-date">September {i + 1}, 2026</div></div>'
+        '<a href="/categoria">Un enlace de categoría mucho más largo que el titular</a>'
+        '</article></div>' for i in range(3)
+    )
+    enlaces = "".join(
+        f'<li><a href="https://enlace{i}.example/">Otro sitio de cine número {i}</a></li>'
+        for i in range(25)
+    )
+    return f'<main>{articulos}</main><ul class="blogroll">{enlaces}</ul>'
+
+
+def test_prioriza_articulos_sobre_blogroll_y_deduce_sus_campos():
+    from datetime import datetime
+
+    html = listado_tipo_wellesnet()
+    candidatos = guess_selectors(html, BASE)
+    mejor = candidatos[0]
+    assert mejor.count == 3  # no divide los artículos por categoría de WordPress
+    assert not any(c.config.item_selector == "ul.blogroll > li" for c in candidatos)
+    entradas = scrape_page(html, "F", mejor.config, base_url=BASE).entries
+    assert [e.url for e in entradas] == [f"{BASE}noticia-{i}" for i in range(3)]
+    assert [e.summary for e in entradas] == [f"Resumen de la noticia {i}." for i in range(3)]
+    assert [datetime.fromtimestamp(e.published_at / 1000, UTC).day for e in entradas] == [1, 2, 3]
+
+
+def test_selector_guardado_excluye_tarjetas_identicas_en_el_lateral():
+    tarjetas = "".join(
+        f'<div class="card"><h3><a href="/post-{i}">Artículo principal {i}</a></h3></div>'
+        for i in range(3)
+    )
+    lateral = tarjetas.replace('/post-', '/lateral-')
+    html = f'<main>{tarjetas}</main><aside>{lateral}</aside>'
+    cfg = guess_selectors(html, BASE)[0].config
+    entradas = scrape_page(html, "F", cfg, base_url=BASE).entries
+    assert [e.url for e in entradas] == [f"{BASE}post-{i}" for i in range(3)]
+
+
+@pytest.mark.parametrize("zona", ['nav', 'aside', 'footer', 'div role="navigation"'])
+def test_no_ofrece_una_pagina_que_solo_contiene_navegacion(zona):
+    enlaces = ''.join(
+        f'<li class="link"><a href="/seccion-{i}">Una sección del sitio {i}</a></li>'
+        for i in range(20)
+    )
+    html = f'<{zona}><ul>{enlaces}</ul></{zona.split()[0]}>'
+    assert guess_selectors(html, BASE) == []
+
+
+def test_conserva_listados_de_enlaces_externos_en_el_contenido_principal():
+    html = '<main><table>' + ''.join(
+        f'<tr class="athing"><td class="title">{i}.</td><td>'
+        f'<span class="title"><a href="https://noticias{i}.example/">'
+        f'Un titular externo válido {i}</a></span></td></tr>' for i in range(3)
+    ) + '</table></main>'
+    cfg = guess_selectors(html, BASE)[0].config
+    assert cfg.item_selector == 'tr.athing'
+    assert len(scrape_page(html, 'F', cfg, base_url=BASE).entries) == 3
+
+
 # ============================================================== raspado
 def test_extrae_titulo_enlace_y_fecha():
     cfg = guess_selectors(fixture("blog_sin_feed.html"), BASE)[0].config

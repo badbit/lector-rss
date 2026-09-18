@@ -102,6 +102,30 @@ class FeedTreeModel(QAbstractItemModel):
             "SELECT COUNT(*) AS n FROM entry_state WHERE starred = 1"
         ).fetchone()["n"]
 
+    def actualizar_contadores(self) -> None:
+        """Actualiza etiquetas sin destruir selección ni carpetas expandidas."""
+        counts = repo.unread_counts(self.conn)
+        saved = self._guardados()
+
+        def actualizar(nodo):
+            if nodo.tipo == "feed":
+                nodo.sin_leer = counts.get(nodo.id, 0)
+            elif nodo.tipo == "especial":
+                nodo.sin_leer = saved if nodo.id == "guardados" else sum(counts.values())
+            for hijo in nodo.hijos:
+                actualizar(hijo)
+
+        actualizar(self.raiz)
+        self._propagar(self.raiz)
+
+        def notificar(padre=QModelIndex()):
+            for row in range(self.rowCount(padre)):
+                index = self.index(row, 0, padre)
+                self.dataChanged.emit(index, index)
+                notificar(index)
+
+        notificar()
+
     def _propagar(self, nodo: NodoArbol) -> int:
         """Una carpeta muestra la suma de los no leídos de lo que contiene."""
         if nodo.tipo in ("feed", "especial"):
@@ -161,6 +185,16 @@ class FeedTreeModel(QAbstractItemModel):
             return "Suscripciones"
         return None
 
+    def indice_de(self, tipo: str, ident: str, padre=QModelIndex()) -> QModelIndex:
+        for fila in range(self.rowCount(padre)):
+            index = self.index(fila, 0, padre)
+            if self.data(index, ROL_TIPO) == tipo and self.data(index, ROL_ID) == ident:
+                return index
+            encontrado = self.indice_de(tipo, ident, index)
+            if encontrado.isValid():
+                return encontrado
+        return QModelIndex()
+
 
 # =========================================================== lista de artículos
 class EntryListModel(QAbstractTableModel):
@@ -188,6 +222,7 @@ class EntryListModel(QAbstractTableModel):
         self.titulos_feed = {f.id: f.display_title for f in repo.list_feeds(self.conn)}
         self.seleccion.offset = 0
         self.entradas = repo.select_entries(self.conn, self.seleccion)
+        self.estados.clear()
         self._agotado = len(self.entradas) < self.seleccion.limit
         self._cargar_estados(self.entradas)
         self.endResetModel()
@@ -285,6 +320,20 @@ class EntryListModel(QAbstractTableModel):
             self.dataChanged.emit(
                 self.index(min(filas), 0), self.index(max(filas), self.columnCount() - 1)
             )
+        # Retirar los artículos que dejan de cumplir la vista sin reiniciar la
+        # paginación. fetchMore usa la nueva longitud como offset.
+        for fila in sorted(set(filas), reverse=True):
+            entrada = self.entrada(fila)
+            if entrada is None:
+                continue
+            read, starred = self.estados[entrada.id]
+            if (self.seleccion.unread_only and read) or (
+                self.seleccion.starred_only and not starred
+            ):
+                self.beginRemoveRows(QModelIndex(), fila, fila)
+                self.entradas.pop(fila)
+                self.estados.pop(entrada.id, None)
+                self.endRemoveRows()
 
     def siguiente_sin_leer(self, desde: int) -> int:
         for fila in range(desde + 1, len(self.entradas)):

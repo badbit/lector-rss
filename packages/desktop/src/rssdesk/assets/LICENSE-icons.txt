@@ -1,3 +1,12 @@
+Color icons: iconos-color/*.svg
+Source: Tango Icon Theme 0.8.90
+https://tango.freedesktop.org/releases/tango-icon-theme-0.8.90.tar.gz
+License: Public Domain, as declared in the release's COPYING.
+Original notice and credits: iconos-color/COPYING and iconos-color/AUTHORS.
+Adaptation: none to the artwork; files have application-specific names.
+Eight empty path elements removed from external-link.svg for Qt compatibility.
+Source paths and version are recorded in iconos-color/README.md.
+
 Icons: iconos/*.svg (toolbar and menu actions)
 Source: lucide-static 1.46.0, https://lucide.dev
 Adaptation: none in the files; the stroke color is taken from the Qt palette at runtime.

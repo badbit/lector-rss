@@ -18,14 +18,22 @@ from PySide6.QtSvg import QSvgRenderer
 ASSETS_DIR = Path(__file__).parent / "assets"
 ICON_PATH = ASSETS_DIR / "org.badbit.LectorRSS.svg"
 ACTION_ICONS_DIR = ASSETS_DIR / "iconos"
+COLOR_ICONS_DIR = ASSETS_DIR / "iconos-color"
 
 
 def app_icon() -> QIcon:
     return QIcon(str(ICON_PATH))
 
 
-def action_icon(name: str) -> QIcon:
-    """Ícono de Lucide (``assets/iconos/<name>.svg``) teñido con la paleta."""
+def action_icon(name: str, theme: str = "monochrome") -> QIcon:
+    """Tango a color o Lucide teñido con la paleta, sin depender del sistema."""
+    if theme == "color":
+        path = COLOR_ICONS_DIR / f"{name}.svg"
+        if path.is_file():
+            icon = QIcon(str(path))
+            if not icon.isNull():
+                return icon
+    # También cubre acciones nuevas que aún no tengan equivalente a color.
     return QIcon(_LucideIconEngine(name))
 
 

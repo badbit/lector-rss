@@ -86,6 +86,11 @@ def save_toolbar_style(style: str, path: Path) -> None:
     _update_config_file(path, lambda data: _desktop_section(data).update(toolbar_style=style))
 
 
+def save_icon_theme(theme: str, path: Path) -> None:
+    """Guarda sólo el tema de íconos, sin persistir credenciales del entorno."""
+    _update_config_file(path, lambda data: _desktop_section(data).update(icon_theme=theme))
+
+
 def _desktop_section(data: dict) -> dict:
     desktop = data.setdefault("desktop", {})
     if not isinstance(desktop, dict):

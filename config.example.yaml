@@ -34,6 +34,7 @@ hub_token: cambia-esto-por-un-token-largo-y-aleatorio
 desktop:
   fetch_locally: false
   toolbar_style: text_and_icons  # text, text_and_icons o icons (Ver → Barra de herramientas)
+  icon_theme: monochrome  # monochrome o color (Ver → Tema de íconos)
 
 # ---------------------------------------------------------------- Obsidian
 obsidian:

@@ -15,7 +15,7 @@ from html import escape
 from pathlib import Path
 
 import qasync
-from PySide6.QtCore import QModelIndex, Qt, QTimer, QUrl
+from PySide6.QtCore import QModelIndex, QSignalBlocker, Qt, QTimer, QUrl
 from PySide6.QtGui import QAction, QActionGroup, QDesktopServices, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
@@ -42,7 +42,7 @@ from rsscore.models import EntrySelection
 from .article import ArticleView
 from .icons import action_icon, app_icon
 from .models import ROL_ID, ROL_TIPO, EntryListModel, FeedTreeModel
-from .settings import edit_settings, save_toolbar_style
+from .settings import edit_settings, save_icon_theme, save_toolbar_style
 from .tasks import Backend
 from .tray import Tray
 
@@ -65,6 +65,11 @@ class MainWindow(QMainWindow):
         self.backend = Backend(conn, cfg)
         self.stop = asyncio.Event()
         self._tareas: set[asyncio.Task] = set()
+        self._lectura_pendiente: str | None = None
+        self._temporizador_lectura = QTimer(self)
+        self._temporizador_lectura.setSingleShot(True)
+        self._temporizador_lectura.setInterval(700)
+        self._temporizador_lectura.timeout.connect(self._marcar_leido_si_sigue)
         self.setWindowTitle("Lector RSS")
         self.setWindowIcon(app_icon())
         self.resize(1280, 820)
@@ -73,6 +78,9 @@ class MainWindow(QMainWindow):
         self._construir_acciones()
         self._construir_bandeja()
         self.setStatusBar(QStatusBar())
+        self.contadores_estado = QLabel()
+        self.contadores_estado.setToolTip("Totales de todo el archivo")
+        self.statusBar().addPermanentWidget(self.contadores_estado)
         self._actualizar_contadores()
 
     # ------------------------------------------------------------- interfaz
@@ -83,6 +91,8 @@ class MainWindow(QMainWindow):
         self.arbol.expandAll()
         self.arbol.setHeaderHidden(False)
         self.arbol.selectionModel().currentChanged.connect(self._al_elegir_origen)
+        self.arbol.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.arbol.customContextMenuRequested.connect(self._menu_contextual_fuentes)
 
         self.lista = QTableView()
         self.modelo_lista = EntryListModel(self.conn)
@@ -99,6 +109,8 @@ class MainWindow(QMainWindow):
         cabecera.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         cabecera.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         self.lista.selectionModel().currentRowChanged.connect(self._al_elegir_articulo)
+        self.lista.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.lista.customContextMenuRequested.connect(self._menu_contextual_articulos)
 
         self.buscador = QLineEdit()
         self.buscador.setPlaceholderText("Buscar en todo el archivo…  (Ctrl+F)")
@@ -126,6 +138,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(horizontal)
 
     def _construir_acciones(self) -> None:
+        self._acciones_con_icono: list[tuple[QAction, str]] = []
         barra = self.barra = QToolBar("Principal")
         barra.setMovable(False)
         self.addToolBar(barra)
@@ -139,7 +152,7 @@ class MainWindow(QMainWindow):
             if atajo:
                 a.setShortcut(QKeySequence(atajo))
             if icono:
-                a.setIcon(action_icon(icono))
+                self._asignar_icono(a, icono)
             if ayuda:
                 # El tooltip nombra el botón aunque la barra sólo muestre íconos;
                 # en los menús, la misma ayuda sale en la barra de estado.
@@ -279,6 +292,7 @@ class MainWindow(QMainWindow):
         )
         menu_ver.addSeparator()
         self._construir_menu_barra(menu_ver)
+        self._construir_menu_iconos(menu_ver)
 
         accion(
             "Nueva &carpeta…",
@@ -302,6 +316,14 @@ class MainWindow(QMainWindow):
             self._mover_feed,
             icono="folder-input",
             ayuda="Lleva la suscripción seleccionada a otra carpeta",
+            menu=menu_suscripciones,
+        )
+        accion(
+            "Mover carpeta…",
+            None,
+            self._mover_carpeta,
+            icono="folder-input",
+            ayuda="Mueve la carpeta seleccionada y sus subcarpetas a otro nivel",
             menu=menu_suscripciones,
         )
         accion(
@@ -347,7 +369,8 @@ class MainWindow(QMainWindow):
 
     def _construir_menu_barra(self, menu_ver: QMenu) -> None:
         """Ver → Barra de herramientas: solo texto, texto e íconos o solo íconos."""
-        submenu = menu_ver.addMenu(action_icon("panel-top"), "&Barra de herramientas")
+        submenu = menu_ver.addMenu("&Barra de herramientas")
+        self._asignar_icono(submenu.menuAction(), "panel-top")
         self.estilos_barra = QActionGroup(self)
         for clave, (texto, _estilo) in ESTILOS_BARRA.items():
             opcion = self.estilos_barra.addAction(texto)
@@ -356,6 +379,33 @@ class MainWindow(QMainWindow):
             submenu.addAction(opcion)
         self.estilos_barra.triggered.connect(self._elegir_estilo_barra)
         self._aplicar_estilo_barra(self.cfg.desktop.toolbar_style)
+
+    def _asignar_icono(self, accion: QAction, nombre: str) -> None:
+        self._acciones_con_icono.append((accion, nombre))
+        accion.setIcon(action_icon(nombre, self.cfg.desktop.icon_theme))
+
+    def _construir_menu_iconos(self, menu_ver: QMenu) -> None:
+        submenu = menu_ver.addMenu("Tema de í&conos")
+        self._asignar_icono(submenu.menuAction(), "panel-top")
+        self.temas_iconos = QActionGroup(self)
+        for clave, texto in (("monochrome", "Monocromo"), ("color", "Color")):
+            opcion = self.temas_iconos.addAction(texto)
+            opcion.setCheckable(True)
+            opcion.setData(clave)
+            opcion.setChecked(clave == self.cfg.desktop.icon_theme)
+            submenu.addAction(opcion)
+        self.temas_iconos.triggered.connect(self._elegir_tema_iconos)
+
+    def _elegir_tema_iconos(self, opcion: QAction) -> None:
+        tema = opcion.data()
+        self.cfg.desktop.icon_theme = tema
+        for accion, nombre in self._acciones_con_icono:
+            accion.setIcon(action_icon(nombre, tema))
+        self.bandeja.set_icon_theme(tema)
+        try:
+            save_icon_theme(tema, self.config_path)
+        except OSError as exc:
+            self.statusBar().showMessage(f"No se pudo guardar el tema de íconos: {exc}", 6000)
 
     def _aplicar_estilo_barra(self, estilo: str) -> None:
         self.barra.setToolButtonStyle(ESTILOS_BARRA[estilo][1])
@@ -380,6 +430,7 @@ class MainWindow(QMainWindow):
 
     def _construir_bandeja(self) -> None:
         self.bandeja = Tray(self)
+        self.bandeja.set_icon_theme(self.cfg.desktop.icon_theme)
         self.bandeja.mostrar_ventana.connect(self._mostrar)
         self.bandeja.refrescar.connect(lambda: self._lanzar(self._refrescar(todos=True)))
         self.bandeja.salir.connect(self._salir)
@@ -407,6 +458,8 @@ class MainWindow(QMainWindow):
     def _al_elegir_origen(self, index: QModelIndex, _anterior=None) -> None:
         if not index.isValid():
             return
+        self._temporizador_lectura.stop()
+        self._lectura_pendiente = None
         tipo = self.modelo_arbol.data(index, ROL_TIPO)
         ident = self.modelo_arbol.data(index, ROL_ID)
         seleccion = EntrySelection(limit=200)
@@ -448,7 +501,8 @@ class MainWindow(QMainWindow):
         ).fetchone():
             self._lanzar(self._cargar_cuerpo(completa.id))
         # Marcar como leído tras un momento, no al pasar de largo con las flechas.
-        QTimer.singleShot(700, lambda fila=index.row(): self._marcar_leido_si_sigue(fila))
+        self._lectura_pendiente = entrada.id
+        self._temporizador_lectura.start()
 
     async def _cargar_cuerpo(self, entry_id: str) -> None:
         try:
@@ -463,11 +517,34 @@ class MainWindow(QMainWindow):
         etiquetas = [t.name for t in repo.entry_tags(self.conn, completa.id)]
         self.articulo.mostrar(completa, feed.display_title if feed else "", etiquetas)
 
-    def _marcar_leido_si_sigue(self, fila: int) -> None:
-        actual = self.lista.currentIndex().row()
-        if actual == fila:
-            self.modelo_lista.marcar([fila], leido=True)
-            self._actualizar_contadores()
+    def _marcar_leido_si_sigue(self) -> None:
+        actual = self.articulo.entrada_actual
+        if actual and actual.id == self._lectura_pendiente:
+            self._marcar_ids([actual.id], leido=True)
+        self._lectura_pendiente = None
+
+    def _marcar_ids(self, ids, *, leido=None, guardado=None) -> None:
+        self._temporizador_lectura.stop()
+        self._lectura_pendiente = None
+        filas = [i for i, e in enumerate(self.modelo_lista.entradas) if e.id in ids]
+        en_lista = {self.modelo_lista.entrada(f).id for f in filas}
+        # Al retirar una fila Qt selecciona otra; no abrir ni marcar esa otra
+        # automáticamente. El artículo que se está leyendo permanece visible.
+        with QSignalBlocker(self.lista.selectionModel()):
+            self.modelo_lista.marcar(filas, leido=leido, guardado=guardado)
+            presentes = {e.id for e in self.modelo_lista.entradas}
+            if any(ident not in presentes for ident in ids):
+                self.lista.clearSelection()
+                self.lista.setCurrentIndex(QModelIndex())
+        # Un artículo abierto puede haber salido ya de la vista «Sin leer».
+        fuera = [ident for ident in ids if ident not in en_lista]
+        if fuera:
+            if leido is not None:
+                repo.set_read(self.conn, fuera, leido)
+            if guardado is not None:
+                repo.set_starred(self.conn, fuera, guardado)
+            self._recargar_lista()
+        self._actualizar_contadores()
 
     # -------------------------------------------------------------- acciones
     def _filas_seleccionadas(self) -> list[int]:
@@ -476,23 +553,84 @@ class MainWindow(QMainWindow):
         )
 
     def _ids_seleccionados(self) -> list[str]:
-        return [
+        ids = [
             e.id
             for e in (self.modelo_lista.entrada(f) for f in self._filas_seleccionadas())
             if e is not None
         ]
+        actual = self.articulo.entrada_actual
+        return ids or ([actual.id] if actual else [])
+
+    def _accion_contextual(self, menu, texto, icono, callback):
+        accion = menu.addAction(action_icon(icono, self.cfg.desktop.icon_theme), texto)
+        accion.triggered.connect(callback)
+        return accion
+
+    def _menu_contextual_articulos(self, posicion) -> None:
+        index = self.lista.indexAt(posicion)
+        if not index.isValid():
+            return
+        if not self.lista.selectionModel().isRowSelected(index.row(), QModelIndex()):
+            # El clic derecho elige su destino pero no lo marca como leído.
+            with QSignalBlocker(self.lista.selectionModel()):
+                self.lista.selectRow(index.row())
+        self._temporizador_lectura.stop()
+        self._lectura_pendiente = None
+        ids = self._ids_seleccionados()
+        feed_ids = list(dict.fromkeys(
+            self.modelo_lista.entrada(f).feed_id for f in self._filas_seleccionadas()
+        ))
+        menu = QMenu(self)
+        menu.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        self._menu_articulos = menu
+        def add(texto, icono, callback):
+            return self._accion_contextual(menu, texto, icono, callback)
+
+        add("Enviar a Obsidian", "notebook-pen",
+            lambda: self._lanzar(self._exportar_obsidian(ids)))
+        add("Enviar a Kindle", "tablet", lambda: self._lanzar(self._enviar_kindle(ids)))
+        menu.addSeparator()
+        add("Marcar como leído", "mail-open", lambda: self._marcar_ids(ids, leido=True))
+        add("Marcar como no leído", "mail-open", lambda: self._marcar_ids(ids, leido=False))
+        guardados = all(repo.get_state(self.conn, ident).starred for ident in ids)
+        add("Quitar de guardados" if guardados else "Guardar", "star",
+            lambda: self._marcar_ids(ids, guardado=not guardados))
+        menu.addSeparator()
+        add("Mover fuente a carpeta…", "folder-input", lambda: self._mover_fuentes(feed_ids))
+        menu.popup(self.lista.viewport().mapToGlobal(posicion))
+
+    def _menu_contextual_fuentes(self, posicion) -> None:
+        index = self.arbol.indexAt(posicion)
+        if index.isValid():
+            self.arbol.setCurrentIndex(index)
+        tipo, ident = self._nodo_seleccionado() if index.isValid() else (None, None)
+        menu = QMenu(self)
+        menu.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        self._menu_fuentes = menu
+        self._accion_contextual(menu, "Nueva carpeta en la raíz…", "folder-plus",
+                                lambda: self._crear_carpeta(None))
+        if tipo == "carpeta":
+            self._accion_contextual(menu, "Nueva subcarpeta…", "folder-plus",
+                                    lambda: self._crear_carpeta(ident))
+            self._accion_contextual(menu, "Mover carpeta…", "folder-input", self._mover_carpeta)
+        elif tipo == "feed":
+            self._accion_contextual(
+                menu, "Mover fuente a carpeta…", "folder-input", self._mover_feed
+            )
+        if tipo in {"feed", "carpeta"}:
+            self._accion_contextual(menu, "Renombrar…", "pencil", self._renombrar_seleccion)
+            self._accion_contextual(menu, "Eliminar…", "trash-2", self._eliminar_seleccion)
+        menu.popup(self.arbol.viewport().mapToGlobal(posicion))
 
     def _alternar(self, que: str) -> None:
-        filas = self._filas_seleccionadas()
-        if not filas:
+        ids = self._ids_seleccionados()
+        if not ids:
             return
-        entrada = self.modelo_lista.entrada(filas[0])
-        leido, guardado = self.modelo_lista.estados.get(entrada.id, (False, False))
+        estado = repo.get_state(self.conn, ids[0])
         if que == "leido":
-            self.modelo_lista.marcar(filas, leido=not leido)
+            self._marcar_ids(ids, leido=not estado.read)
         else:
-            self.modelo_lista.marcar(filas, guardado=not guardado)
-        self._actualizar_contadores()
+            self._marcar_ids(ids, guardado=not estado.starred)
 
     def _siguiente_sin_leer(self) -> None:
         actual = self.lista.currentIndex().row()
@@ -508,11 +646,15 @@ class MainWindow(QMainWindow):
             self._siguiente_sin_leer()
 
     def _marcar_todo_leido(self) -> None:
-        ids = [e.id for e in self.modelo_lista.entradas]
-        if not ids:
-            return
-        repo.set_read(self.conn, ids, True)
-        self.modelo_lista.recargar()
+        seleccion = self.modelo_lista.seleccion.model_copy(deep=True)
+        seleccion.limit = 1000
+        seleccion.offset = 0
+        while entradas := repo.select_entries(self.conn, seleccion):
+            repo.set_read(self.conn, [e.id for e in entradas], True)
+            # En «Sin leer» el lote desaparece del resultado al marcarlo.
+            if not seleccion.unread_only:
+                seleccion.offset += len(entradas)
+        self._recargar_lista()
         self._actualizar_contadores()
 
     def _abrir_en_navegador(self) -> None:
@@ -549,12 +691,16 @@ class MainWindow(QMainWindow):
         return self.modelo_arbol.data(index, ROL_TIPO), self.modelo_arbol.data(index, ROL_ID)
 
     def _nueva_carpeta(self) -> None:
+        tipo, ident = self._nodo_seleccionado()
+        self._crear_carpeta(ident if tipo == "carpeta" else None)
+
+    def _crear_carpeta(self, parent_id: str | None) -> None:
         from rsscore.models import Folder
 
         nombre, ok = QInputDialog.getText(self, "Nueva carpeta", "Nombre:")
         if not ok or not nombre.strip():
             return
-        repo.upsert_folder(self.conn, Folder(name=nombre.strip()))
+        repo.upsert_folder(self.conn, Folder(name=nombre.strip(), parent_id=parent_id))
         self._recargar_arbol()
         self._lanzar(self._sincronizar())
 
@@ -589,15 +735,51 @@ class MainWindow(QMainWindow):
         if tipo != "feed" or not ident:
             self.statusBar().showMessage("Selecciona una suscripción", 4000)
             return
-        folders = repo.list_folders(self.conn)
-        labels = ["Sin carpeta", *(f.name for f in folders)]
+        self._mover_fuentes([ident])
+
+    def _elegir_carpeta(self, titulo, excluidas=()):
+        folders = {f.id: f for f in repo.list_folders(self.conn)}
+
+        def ruta(folder):
+            partes = [folder.name]
+            seen = {folder.id}
+            while folder.parent_id in folders and folder.parent_id not in seen:
+                folder = folders[folder.parent_id]
+                seen.add(folder.id)
+                partes.append(folder.name)
+            return " / ".join(reversed(partes))
+
+        opciones = sorted((ruta(f), f.id) for f in folders.values() if f.id not in excluidas)
+        nombres = [p for p, _ in opciones]
+        labels = ["Sin carpeta (raíz)", *(
+            f"{p} [{ident}]" if nombres.count(p) > 1 else p for p, ident in opciones
+        )]
         elegido, ok = QInputDialog.getItem(
-            self, "Mover suscripción", "Carpeta:", labels, editable=False
+            self, titulo, "Carpeta:", labels, editable=False
+        )
+        if not ok or elegido not in labels:
+            return False, None
+        return True, None if labels.index(elegido) == 0 else opciones[labels.index(elegido) - 1][1]
+
+    def _mover_fuentes(self, feed_ids) -> None:
+        ok, folder_id = self._elegir_carpeta("Mover fuente a carpeta")
+        if not ok:
+            return
+        for ident in feed_ids:
+            repo.set_feed_folder(self.conn, ident, folder_id)
+        self._recargar_arbol()
+        self._lanzar(self._sincronizar())
+
+    def _mover_carpeta(self) -> None:
+        tipo, ident = self._nodo_seleccionado()
+        if tipo != "carpeta" or not ident:
+            return
+        ok, parent_id = self._elegir_carpeta(
+            "Mover carpeta", repo.descendant_folder_ids(self.conn, [ident])
         )
         if not ok:
             return
-        folder_id = None if elegido == "Sin carpeta" else folders[labels.index(elegido) - 1].id
-        repo.set_feed_folder(self.conn, ident, folder_id)
+        repo.move_folder(self.conn, ident, parent_id)
         self._recargar_arbol()
         self._lanzar(self._sincronizar())
 
@@ -623,10 +805,25 @@ class MainWindow(QMainWindow):
         self._lanzar(self._sincronizar())
 
     def _recargar_arbol(self) -> None:
-        self.modelo_arbol.recargar()
+        tipo, ident = self._nodo_seleccionado()
+        with QSignalBlocker(self.arbol.selectionModel()):
+            self.modelo_arbol.recargar()
+            if tipo and ident:
+                self.arbol.setCurrentIndex(self.modelo_arbol.indice_de(tipo, ident))
         self.arbol.expandAll()
-        self.modelo_lista.recargar()
+        self._recargar_lista()
         self._actualizar_contadores()
+
+    def _recargar_lista(self) -> None:
+        self._temporizador_lectura.stop()
+        self._lectura_pendiente = None
+        ids = self._ids_seleccionados()
+        with QSignalBlocker(self.lista.selectionModel()):
+            self.modelo_lista.recargar()
+            for fila, entrada in enumerate(self.modelo_lista.entradas):
+                if entrada.id in ids:
+                    self.lista.selectRow(fila)
+                    break
 
     def _importar_opml(self) -> None:
         from PySide6.QtWidgets import QFileDialog
@@ -653,10 +850,18 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Escrito en {ruta}", 5000)
 
     def _actualizar_contadores(self) -> None:
-        sin_leer = self.conn.execute(
-            "SELECT COUNT(*) AS n FROM entry_state WHERE read = 0"
-        ).fetchone()["n"]
+        counts = self.conn.execute(
+            "SELECT COUNT(*) AS total, COALESCE(SUM(COALESCE(s.read,0)),0) AS leidas, "
+            "COALESCE(SUM(COALESCE(s.starred,0)),0) AS guardadas "
+            "FROM entries e LEFT JOIN entry_state s ON s.entry_id=e.id"
+        ).fetchone()
+        sin_leer = counts["total"] - counts["leidas"]
         self.bandeja.actualizar_contador(sin_leer)
+        self.modelo_arbol.actualizar_contadores()
+        self.contadores_estado.setText(
+            f"Total: {counts['total']} · Leídas: {counts['leidas']} · "
+            f"No leídas: {sin_leer} · Guardadas: {counts['guardadas']}"
+        )
         self.etiqueta_estado.setText(f"  {sin_leer} sin leer  ")
 
     # -------------------------------------------------------- tareas async
@@ -713,7 +918,7 @@ class MainWindow(QMainWindow):
         respuesta = QMessageBox.question(
             self,
             "Sin feed, pero se puede raspar",
-            f"{url} no publica feed.\n\nHe reconocido {mejor.count} artículos con "
+            f"No encontré un feed en {url}.\n\nPosible listado de {mejor.count} artículos con "
             f"«{mejor.config.item_selector}»:\n\n{muestra}\n\n¿Lo doy de alta así?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
@@ -726,10 +931,7 @@ class MainWindow(QMainWindow):
     async def _refrescar(self, *, todos: bool = False) -> None:
         self.statusBar().showMessage("Actualizando…")
         feeds, nuevas = await self.backend.refrescar(todos=todos)
-        self.modelo_arbol.recargar()
-        self.arbol.expandAll()
-        self.modelo_lista.recargar()
-        self._actualizar_contadores()
+        self._recargar_arbol()
         self.statusBar().showMessage(f"{feeds} feeds · {nuevas} artículos nuevos", 6000)
         if nuevas:
             self.bandeja.avisar("Lector RSS", f"{nuevas} artículos nuevos")
@@ -737,13 +939,11 @@ class MainWindow(QMainWindow):
     async def _sincronizar(self) -> None:
         self.statusBar().showMessage("Sincronizando…")
         resultado = await self.backend.sincronizar()
-        self.modelo_arbol.recargar()
-        self.modelo_lista.recargar()
-        self._actualizar_contadores()
+        self._recargar_arbol()
         self.statusBar().showMessage(f"Sincronizado · {resultado}", 6000)
 
-    async def _exportar_obsidian(self) -> None:
-        ids = self._ids_seleccionados()
+    async def _exportar_obsidian(self, ids=None) -> None:
+        ids = self._ids_seleccionados() if ids is None else ids
         if not ids:
             return
         try:
@@ -753,8 +953,8 @@ class MainWindow(QMainWindow):
             return
         self.statusBar().showMessage(f"{len(rutas)} notas escritas en la bóveda", 6000)
 
-    async def _enviar_kindle(self) -> None:
-        ids = self._ids_seleccionados()
+    async def _enviar_kindle(self, ids=None) -> None:
+        ids = self._ids_seleccionados() if ids is None else ids
         if not ids:
             return
         try:
@@ -788,13 +988,11 @@ class MainWindow(QMainWindow):
     # ---------------------------------------------------------------- bucles
     def arrancar_tareas(self) -> None:
         self._lanzar(self.backend.bucle_refresco(self.stop, self._al_refrescar_en_segundo_plano))
-        self._lanzar(self.backend.bucle_sync(self.stop, lambda r: None))
+        self._lanzar(self.backend.bucle_sync(self.stop, lambda r: self._recargar_arbol()))
         self._lanzar(self.backend.worker_exportaciones(self.stop))
 
     def _al_refrescar_en_segundo_plano(self, feeds: int, nuevas: int) -> None:
-        self.modelo_arbol.recargar()
-        self.arbol.expandAll()
-        self._actualizar_contadores()
+        self._recargar_arbol()
         if nuevas:
             self.bandeja.avisar("Lector RSS", f"{nuevas} artículos nuevos")
 

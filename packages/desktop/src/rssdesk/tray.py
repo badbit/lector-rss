@@ -59,8 +59,17 @@ class Tray(QSystemTrayIcon):
         menu.addSeparator()
         menu.addAction(accion_salir)
         self.setContextMenu(menu)
+        self._acciones_con_icono = (
+            (accion_abrir, "app-window"),
+            (accion_refrescar, "refresh-cw"),
+            (accion_salir, "log-out"),
+        )
 
         self.activated.connect(self._al_activar)
+
+    def set_icon_theme(self, theme: str) -> None:
+        for accion, nombre in self._acciones_con_icono:
+            accion.setIcon(action_icon(nombre, theme))
 
     def _al_activar(self, motivo) -> None:
         if motivo == QSystemTrayIcon.ActivationReason.Trigger:
