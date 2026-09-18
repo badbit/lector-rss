@@ -40,8 +40,10 @@ from rsscore.db import open_db
 from rsscore.models import EntrySelection
 
 from .article import ArticleView
+from .favicons import Favicons
 from .icons import action_icon, app_icon
 from .models import ROL_ID, ROL_TIPO, EntryListModel, FeedTreeModel
+from .resources import RemoteResources, web_url
 from .settings import edit_settings, save_icon_theme, save_toolbar_style
 from .tasks import Backend
 from .tray import Tray
@@ -85,9 +87,19 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------- interfaz
     def _construir_paneles(self) -> None:
+        self.recursos = RemoteResources(self, self.cfg.db_path.parent / "cache" / "web")
+        self.favicons = Favicons(self.recursos, self)
         self.arbol = QTreeView()
-        self.modelo_arbol = FeedTreeModel(self.conn)
+        self.arbol.setUniformRowHeights(True)
+        self.modelo_arbol = FeedTreeModel(self.conn, favicons=self.favicons,
+                                         icon_theme=self.cfg.desktop.icon_theme)
         self.arbol.setModel(self.modelo_arbol)
+        self.arbol.setDragDropMode(QTreeView.DragDropMode.DragDrop)
+        self.arbol.setDefaultDropAction(Qt.DropAction.MoveAction)
+        self.arbol.setDropIndicatorShown(True)
+        self.modelo_arbol.movido.connect(self._tras_arrastrar_fuente)
+        self.modelo_arbol.error_movimiento.connect(
+            lambda error: self.statusBar().showMessage(f"No se pudo mover: {error}", 6000))
         self.arbol.expandAll()
         self.arbol.setHeaderHidden(False)
         self.arbol.selectionModel().currentChanged.connect(self._al_elegir_origen)
@@ -109,6 +121,7 @@ class MainWindow(QMainWindow):
         cabecera.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         cabecera.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         self.lista.selectionModel().currentRowChanged.connect(self._al_elegir_articulo)
+        self.lista.doubleClicked.connect(self._abrir_fila_en_navegador)
         self.lista.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.lista.customContextMenuRequested.connect(self._menu_contextual_articulos)
 
@@ -124,7 +137,7 @@ class MainWindow(QMainWindow):
         caja.addWidget(self.buscador)
         caja.addWidget(self.lista)
 
-        self.articulo = ArticleView()
+        self.articulo = ArticleView(resources=self.recursos)
 
         vertical = QSplitter(Qt.Orientation.Vertical)
         vertical.addWidget(derecha_arriba)
@@ -271,7 +284,8 @@ class MainWindow(QMainWindow):
             "Ctrl+A",
             self._marcar_todo_leido,
             icono="check-check",
-            ayuda="Marca como leídos todos los artículos de la lista",
+            ayuda="Varias entradas: solo esas; una: toda su fuente; sin selección: la vista",
+            en_barra=True,
             menu=menu_ver,
         )
         accion(
@@ -402,6 +416,8 @@ class MainWindow(QMainWindow):
         for accion, nombre in self._acciones_con_icono:
             accion.setIcon(action_icon(nombre, tema))
         self.bandeja.set_icon_theme(tema)
+        self.modelo_arbol.icon_theme = tema
+        self.arbol.viewport().update()
         try:
             save_icon_theme(tema, self.config_path)
         except OSError as exc:
@@ -646,7 +662,24 @@ class MainWindow(QMainWindow):
             self._siguiente_sin_leer()
 
     def _marcar_todo_leido(self) -> None:
-        seleccion = self.modelo_lista.seleccion.model_copy(deep=True)
+        filas = self.lista.selectionModel().selectedRows()
+        ids = [self.modelo_lista.entrada(i.row()).id for i in filas]
+        if len(ids) > 1:
+            self._marcar_ids(ids, leido=True)
+            return
+        tipo, ident = self._nodo_seleccionado()
+        if ids:
+            entrada = repo.get_entry(self.conn, ids[0])
+            if entrada is None:
+                return
+            seleccion = EntrySelection(feed_ids=[entrada.feed_id])
+        elif tipo == "feed":
+            seleccion = EntrySelection(feed_ids=[ident])
+        elif self.articulo.entrada_actual is not None:
+            # La fila puede haber desaparecido automáticamente de «Sin leer».
+            seleccion = EntrySelection(feed_ids=[self.articulo.entrada_actual.feed_id])
+        else:
+            seleccion = self.modelo_lista.seleccion.model_copy(deep=True)
         seleccion.limit = 1000
         seleccion.offset = 0
         while entradas := repo.select_entries(self.conn, seleccion):
@@ -659,13 +692,26 @@ class MainWindow(QMainWindow):
 
     def _abrir_en_navegador(self) -> None:
         entrada = self.articulo.entrada_actual
-        if entrada and entrada.url:
+        if entrada and entrada.url and web_url(entrada.url):
             QDesktopServices.openUrl(QUrl(entrada.url))
+
+    def _abrir_fila_en_navegador(self, index: QModelIndex) -> None:
+        entrada = self.modelo_lista.entrada(index.row()) if index.isValid() else None
+        if entrada and entrada.url:
+            url = QUrl(entrada.url)
+            if web_url(entrada.url):
+                QDesktopServices.openUrl(url)
 
     def _buscar(self) -> None:
         texto = self.buscador.text().strip()
         if not texto:
             return
+        self._temporizador_lectura.stop()
+        self._lectura_pendiente = None
+        self.articulo.limpiar()
+        with QSignalBlocker(self.arbol.selectionModel()):
+            self.arbol.clearSelection()
+            self.arbol.setCurrentIndex(QModelIndex())
         self.modelo_lista.set_seleccion(EntrySelection(query=texto, limit=200))
         self.statusBar().showMessage(
             f"{self.modelo_lista.rowCount()} resultados para «{texto}»", 4000
@@ -813,6 +859,12 @@ class MainWindow(QMainWindow):
         self.arbol.expandAll()
         self._recargar_lista()
         self._actualizar_contadores()
+
+    def _tras_arrastrar_fuente(self) -> None:
+        self.arbol.expandAll()
+        self._recargar_lista()
+        self._actualizar_contadores()
+        self._lanzar(self._sincronizar())
 
     def _recargar_lista(self) -> None:
         self._temporizador_lectura.stop()

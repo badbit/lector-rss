@@ -106,6 +106,15 @@ Las fuentes se organizan en carpetas y subcarpetas. Con clic derecho en el
 panel de suscripciones puedes crear una carpeta en la raíz, crear una
 subcarpeta, renombrar y mover fuentes o carpetas; los destinos muestran su
 ruta completa. Una carpeta no puede moverse dentro de sus propias subcarpetas.
+También puedes **arrastrar y soltar** fuentes y carpetas: encima de una carpeta
+para moverlas a ella, entre filas para ordenarlas, o al espacio vacío del panel
+para devolverlas a la raíz. Se mueve la fuente completa, sin borrar artículos.
+La pertenencia a carpetas se sincroniza; el orden visual manual es local a este
+escritorio y se conserva al reiniciar.
+
+Las carpetas tienen ícono propio y las fuentes intentan cargar el favicon de
+su sitio; si no está disponible se muestra el símbolo RSS naranja. No se usan
+servicios de terceros para buscar favicons.
 
 El clic derecho en un artículo permite enviarlo a Obsidian o Kindle, marcarlo
 como leído o no leído, guardarlo y **mover toda su fuente** a una carpeta.
@@ -113,6 +122,22 @@ Las opciones también admiten varias entradas seleccionadas. Al leer un artícul
 se actualizan la vista «Sin leer» y los contadores, conservando abierto su texto.
 La barra de estado muestra permanentemente los totales del archivo: entradas,
 leídas, no leídas y guardadas.
+
+El título del artículo y el doble clic en una fila abren el original en el
+navegador. El botón **Marcar todo como leído** actúa según la selección: varias
+entradas → solo esas; una entrada → todas las de su fuente, incluidas las que
+no están cargadas en la lista; una fuente sin entradas seleccionadas → toda esa
+fuente. En una carpeta o vista global sin artículo seleccionado marca la vista
+actual completa. Si la entrada acaba de salir de «Sin leer» pero sigue abierta,
+se toma su fuente.
+
+El visor carga las imágenes HTTP/HTTPS de forma asíncrona y ajustadas al ancho;
+admite direcciones relativas y atributos habituales de carga diferida. No ejecuta
+JavaScript ni lee archivos locales referenciados por artículos. **Las imágenes y
+favicons sí generan peticiones a sus servidores**, sin cookies ni credenciales
+del navegador. Hay límites de tamaño, tiempo y concurrencia, y una caché HTTP
+de hasta 32 MiB junto a la base de datos (`cache/web/`). Las imágenes protegidas
+por autenticación o por restricciones del sitio pueden seguir sin mostrarse.
 
 `rss show ID` descarga el cuerpo desde el hub si falta; `--offline` usa solo lo
 local. Consultar no cambia el estado: añade `--mark-read` para marcarlo leído.

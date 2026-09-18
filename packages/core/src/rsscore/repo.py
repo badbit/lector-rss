@@ -158,6 +158,25 @@ def outbox_clear(conn: sqlite3.Connection, ids: Iterable[int]) -> None:
 # ======================================================================= folders
 
 
+def desktop_tree_order(conn: sqlite3.Connection, parent_id: str | None) -> list[str]:
+    """Orden visual local; la pertenencia a carpetas sí viaja por sync."""
+    key = "desktop.tree_order." + (parent_id or "root")
+    row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    try:
+        value = json.loads(row[0]) if row else []
+    except (ValueError, TypeError):
+        return []
+    return value if isinstance(value, list) and all(isinstance(v, str) for v in value) else []
+
+
+def set_desktop_tree_order(conn: sqlite3.Connection, parent_id: str | None, ids: list[str]):
+    conn.execute(
+        "INSERT INTO settings (key,value) VALUES (?,?) "
+        "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        ("desktop.tree_order." + (parent_id or "root"), json.dumps(ids)),
+    )
+
+
 def upsert_folder(conn: sqlite3.Connection, folder: Folder, *, track: bool = True) -> Folder:
     conn.execute(
         "INSERT INTO folders (id, parent_id, name, position, deleted, lamport, device_id, "

@@ -330,6 +330,17 @@ def sanitize_html(html: str | None, *, base_url: str = "") -> str:
     for tag in soup.find_all(True):
         if not isinstance(tag, Tag):
             continue
+        if tag.name == "img":
+            # QTextBrowser y los exportadores no ejecutan lazy-loading de JS.
+            lazy = tag.get("data-src") or tag.get("data-original") or tag.get("data-lazy-src")
+            if isinstance(lazy, str) and lazy.strip():
+                tag["src"] = lazy.strip()
+            if not tag.get("src"):
+                srcset = tag.get("srcset") or tag.get("data-srcset")
+                if isinstance(srcset, str) and srcset.strip():
+                    candidates = [part.strip().split() for part in srcset.split(",")]
+                    if first := next((parts[0] for parts in candidates if parts), None):
+                        tag["src"] = first
         if tag.name == "img" and _is_tracking_pixel(tag):
             tag.decompose()
             continue

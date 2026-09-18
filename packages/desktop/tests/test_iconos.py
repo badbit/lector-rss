@@ -67,7 +67,7 @@ def test_barra_y_menus_llevan_iconos_y_ayuda(crear_ventana):
         for a in ventana.barra.actions()
         if isinstance(ventana.barra.widgetForAction(a), QToolButton)
     ]
-    assert len(botones) == 6
+    assert len(botones) == 7
     for boton in botones:
         assert not boton.icon().isNull(), boton.text()
         assert boton.statusTip() and boton.statusTip() in boton.toolTip()

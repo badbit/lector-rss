@@ -22,6 +22,7 @@ ignore = ["B008", "RUF001", "RUF002", "RUF003"]
 testpaths = ["packages/core/tests", "packages/hub/tests", "packages/desktop/tests"]
 asyncio_mode = "auto"
 filterwarnings = ["ignore::DeprecationWarning"]
+markers = ["resource_network: prueba Qt HTTP contra un servidor local aislado"]
 
 [tool.mypy]
 python_version = "3.12"

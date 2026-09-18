@@ -6,8 +6,8 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QContextMenuEvent
+from PySide6.QtCore import QItemSelectionModel, QModelIndex, QPointF, Qt
+from PySide6.QtGui import QContextMenuEvent, QDesktopServices, QDragEnterEvent, QDropEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QInputDialog
 from rsscore import repo
@@ -15,7 +15,7 @@ from rsscore.config import Config
 from rsscore.db import open_db
 from rsscore.models import Entry, EntrySelection, Feed, Folder
 from rssdesk.main import MainWindow
-from rssdesk.models import PAGINA, ROL_SIN_LEER, EntryListModel
+from rssdesk.models import PAGINA, ROL_SIN_LEER, EntryListModel, FeedTreeModel
 
 
 @pytest.fixture
@@ -241,3 +241,120 @@ def test_contadores_del_archivo_vacio_y_mensajes_de_estado(tmp_path):
         window.deleteLater()
         app.processEvents()
         conn.close()
+
+
+def test_doble_clic_abre_la_fila_pulsada(ventana, monkeypatch):
+    opened = []
+    monkeypatch.setattr(QDesktopServices, "openUrl", lambda url: opened.append(url.toString()))
+    for i, e in enumerate(ventana.modelo_lista.entradas):
+        e.url = f"https://ejemplo.test/{i}"
+    pos = ventana.lista.visualRect(ventana.modelo_lista.index(1, 1)).center()
+    QTest.mouseClick(ventana.lista.viewport(), Qt.MouseButton.LeftButton, pos=pos)
+    QTest.mouseDClick(ventana.lista.viewport(), Qt.MouseButton.LeftButton, pos=pos)
+    assert opened == ["https://ejemplo.test/1"]
+
+
+def boton_marcar(window):
+    action = next(a for a in window.barra.actions() if a.text() == "Marcar todo como leído")
+    QTest.mouseClick(window.barra.widgetForAction(action), Qt.MouseButton.LeftButton)
+
+
+def test_boton_marca_multiseleccion_no_toda_la_fuente(ventana):
+    ventana.lista.selectRow(0)
+    ventana.lista.selectionModel().select(ventana.modelo_lista.index(1, 0),
+        QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows)
+    ids = [e.id for e in ventana.modelo_lista.entradas]
+    boton_marcar(ventana)
+    assert [repo.get_state(ventana.conn, i).read for i in ids] == [True, True, False]
+    QTest.qWait(850)
+    assert not repo.get_state(ventana.conn, ids[2]).read
+
+
+def test_boton_una_entrada_marca_su_fuente_incluye_no_cargadas(ventana):
+    feed_id = ventana.modelo_lista.entrada(0).feed_id
+    other = repo.add_feed(ventana.conn, Feed(url="https://otra.test/rss", title="Otra"))
+    other_entry = repo.insert_entry(ventana.conn, Entry(feed_id=other.id, guid_hash="other",
+                                                       content_hash="other", title="Otra"))
+    for i in range(PAGINA + 5):
+        repo.insert_entry(ventana.conn, Entry(feed_id=feed_id, guid_hash=f"b{i}",
+                                              content_hash=f"b{i}", title=f"Extra{i}"))
+    ventana.lista.selectRow(0)
+    boton_marcar(ventana)
+    assert repo.unread_counts(ventana.conn).get(feed_id, 0) == 0
+    assert not repo.get_state(ventana.conn, other_entry).read
+
+
+def test_boton_fuente_sin_entradas_seleccionadas(ventana):
+    feed_id = ventana.modelo_lista.entrada(0).feed_id
+    ventana.arbol.setCurrentIndex(ventana.modelo_arbol.indice_de("feed", feed_id))
+    assert not ventana.lista.selectionModel().selectedRows()
+    boton_marcar(ventana)
+    assert repo.unread_counts(ventana.conn) == {}
+
+
+def test_arrastrar_fuente_a_carpeta_y_raiz_persiste(ventana):
+    folder = repo.upsert_folder(ventana.conn, Folder(name="Cine"))
+    feed_id = ventana.modelo_lista.entrada(0).feed_id
+    ventana._recargar_arbol()
+    model = ventana.modelo_arbol
+    source = model.indice_de("feed", feed_id)
+    dest = model.indice_de("carpeta", folder.id)
+    mime = model.mimeData([source])
+    assert model.dropMimeData(mime, Qt.DropAction.MoveAction, -1, 0, dest)
+    assert repo.get_feed(ventana.conn, feed_id).folder_id == folder.id
+    assert model.indice_de("feed", feed_id).parent().data() == "Cine  (3)"
+    assert model.dropMimeData(mime, Qt.DropAction.MoveAction, -1, 0, QModelIndex())
+    assert repo.get_feed(ventana.conn, feed_id).folder_id is None
+    assert not model.indice_de("feed", feed_id).parent().isValid()
+
+
+def test_arrastrar_carpeta_impide_ciclos_y_ordena_persistentemente(ventana):
+    conn = ventana.conn
+    a = repo.upsert_folder(conn, Folder(name="A"))
+    b = repo.upsert_folder(conn, Folder(name="B", parent_id=a.id))
+    c = repo.upsert_folder(conn, Folder(name="C"))
+    ventana._recargar_arbol()
+    model = ventana.modelo_arbol
+    ia = model.indice_de("carpeta", a.id)
+    ib = model.indice_de("carpeta", b.id)
+    mime = model.mimeData([ia])
+    for target in (ia, ib, model.indice_de("especial", "todos")):
+        assert not model.dropMimeData(mime, Qt.DropAction.MoveAction, -1, 0, target)
+    ic = model.indice_de("carpeta", c.id)
+    assert model.dropMimeData(model.mimeData([ic]), Qt.DropAction.MoveAction,
+                              ia.row(), 0, QModelIndex())
+    reloaded = FeedTreeModel(conn)
+    assert reloaded.indice_de("carpeta", c.id).row() < reloaded.indice_de("carpeta", a.id).row()
+    assert repo.get_folder(conn, b.id).parent_id == a.id
+    assert not reloaded.canDropMimeData(mime, Qt.DropAction.MoveAction, -1, 0, QModelIndex())
+
+
+def test_drop_event_del_arbol_mueve_fuente(ventana):
+    folder = repo.upsert_folder(ventana.conn, Folder(name="Destino"))
+    feed_id = ventana.modelo_lista.entrada(0).feed_id
+    ventana._recargar_arbol()
+    model = ventana.modelo_arbol
+    source = model.indice_de("feed", feed_id)
+    dest = model.indice_de("carpeta", folder.id)
+    mime = model.mimeData([source])
+    pos = ventana.arbol.visualRect(dest).center()
+    enter = QDragEnterEvent(pos, Qt.DropAction.MoveAction, mime,
+                            Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
+    QApplication.sendEvent(ventana.arbol.viewport(), enter)
+    assert enter.isAccepted()
+    drop = QDropEvent(QPointF(pos), Qt.DropAction.MoveAction, mime,
+                      Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
+    QApplication.sendEvent(ventana.arbol.viewport(), drop)
+    assert drop.isAccepted()
+    assert repo.get_feed(ventana.conn, feed_id).folder_id == folder.id
+
+
+def test_iconos_del_arbol_distinguen_carpeta_y_fuente(ventana):
+    folder = repo.upsert_folder(ventana.conn, Folder(name="Carpeta"))
+    feed_id = ventana.modelo_lista.entrada(0).feed_id
+    ventana._recargar_arbol()
+    model = ventana.modelo_arbol
+    folder_icon = model.indice_de("carpeta", folder.id).data(Qt.ItemDataRole.DecorationRole)
+    feed_icon = model.indice_de("feed", feed_id).data(Qt.ItemDataRole.DecorationRole)
+    assert not folder_icon.isNull() and not feed_icon.isNull()
+    assert folder_icon.pixmap(24, 24).toImage() != feed_icon.pixmap(24, 24).toImage()

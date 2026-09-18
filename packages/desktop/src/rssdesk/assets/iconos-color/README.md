@@ -5,6 +5,9 @@ Se conservan los SVG, su aviso original (`COPYING`) y los créditos (`AUTHORS`).
 No se requiere instalar el tema en el equipo. Qt escala los SVG y genera
 las variantes de las acciones desactivadas.
 
+Excepción: `folder.svg` es un dibujo simple propio de Lector RSS, bajo
+AGPL-3.0-or-later, no un recurso de Tango.
+
 Fuente: https://tango.freedesktop.org/releases/tango-icon-theme-0.8.90.tar.gz
 SHA-256: 6e98d8032d57d818acc907ec47e6a718851ff251ae7c29aafb868743eb65c88e
 

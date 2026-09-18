@@ -7,15 +7,25 @@ construir esa lista entera congelaría la interfaz.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from PySide6.QtCore import QAbstractItemModel, QAbstractTableModel, QModelIndex, Qt
+from PySide6.QtCore import (
+    QAbstractItemModel,
+    QAbstractTableModel,
+    QMimeData,
+    QModelIndex,
+    Qt,
+    Signal,
+)
 from PySide6.QtGui import QFont
 from rsscore import repo
 from rsscore.models import Entry, EntrySelection
 from rsscore.rules.smart import list_saved_searches
+
+from .icons import action_icon, app_icon
 
 PAGINA = 200
 
@@ -42,9 +52,18 @@ class NodoArbol:
 class FeedTreeModel(QAbstractItemModel):
     """Carpetas, feeds y vistas especiales, con contadores de no leídos."""
 
-    def __init__(self, conn: sqlite3.Connection, parent=None) -> None:
+    movido = Signal()
+    error_movimiento = Signal(str)
+    MIME = "application/x-lector-rss-tree-node"
+
+    def __init__(self, conn: sqlite3.Connection, parent=None, *, favicons=None,
+                 icon_theme="monochrome") -> None:
         super().__init__(parent)
         self.conn = conn
+        self.favicons = favicons
+        self.icon_theme = icon_theme
+        if favicons is not None:
+            favicons.disponible.connect(self._favicon_disponible)
         self.raiz = NodoArbol("raiz", "", "")
         self.recargar()
 
@@ -75,7 +94,8 @@ class FeedTreeModel(QAbstractItemModel):
             nodo.padre = padre
             padre.hijos.append(nodo)
 
-        for feed in repo.list_feeds(self.conn):
+        self.feeds = {f.id: f for f in repo.list_feeds(self.conn)}
+        for feed in self.feeds.values():
             padre = nodos.get(feed.folder_id) if feed.folder_id else self.raiz
             padre = padre or self.raiz
             nodo = NodoArbol(
@@ -87,6 +107,13 @@ class FeedTreeModel(QAbstractItemModel):
                 error=feed.last_error,
             )
             padre.hijos.append(nodo)
+
+        for padre in [self.raiz, *nodos.values()]:
+            order = {ident: i for i, ident in enumerate(
+                repo.desktop_tree_order(self.conn, padre.id or None))}
+            # Vistas permanece al principio; los elementos nuevos conservan orden alfabético.
+            padre.hijos.sort(key=lambda n: -1 if n.tipo == "grupo"
+                             else order.get(n.id, len(order)))
 
         self._propagar(self.raiz)
         vistas = list_saved_searches(self.conn)
@@ -138,7 +165,7 @@ class FeedTreeModel(QAbstractItemModel):
     # ------------------------------------------------------- API de QAbstractItemModel
     def index(self, row: int, column: int, parent=QModelIndex()) -> QModelIndex:
         padre = parent.internalPointer() if parent.isValid() else self.raiz
-        if row < 0 or row >= len(padre.hijos):
+        if column != 0 or row < 0 or row >= len(padre.hijos):
             return QModelIndex()
         return self.createIndex(row, column, padre.hijos[row])
 
@@ -151,6 +178,8 @@ class FeedTreeModel(QAbstractItemModel):
         return self.createIndex(nodo.padre.fila(), 0, nodo.padre)
 
     def rowCount(self, parent=QModelIndex()) -> int:
+        if parent.isValid() and parent.column() != 0:
+            return 0
         nodo = parent.internalPointer() if parent.isValid() else self.raiz
         return len(nodo.hijos)
 
@@ -162,6 +191,14 @@ class FeedTreeModel(QAbstractItemModel):
             return None
         nodo: NodoArbol = index.internalPointer()
         match role:
+            case Qt.ItemDataRole.DecorationRole:
+                if nodo.tipo == "carpeta":
+                    return action_icon("folder", self.icon_theme)
+                if nodo.tipo == "feed":
+                    if self.favicons is not None:
+                        self.favicons.solicitar(self.feeds[nodo.id])
+                        return self.favicons.icons.get(nodo.id, app_icon())
+                    return app_icon()
             case Qt.ItemDataRole.DisplayRole:
                 if nodo.sin_leer and nodo.tipo != "grupo":
                     return f"{nodo.nombre}  ({nodo.sin_leer})"
@@ -179,6 +216,112 @@ class FeedTreeModel(QAbstractItemModel):
             case _ if role == ROL_SIN_LEER:
                 return nodo.sin_leer
         return None
+
+    def _favicon_disponible(self, ident):
+        index = self.indice_de("feed", ident)
+        if index.isValid():
+            self.dataChanged.emit(index, index, [Qt.ItemDataRole.DecorationRole])
+
+    def flags(self, index):
+        if not index.isValid():
+            return Qt.ItemFlag.ItemIsDropEnabled
+        flags = super().flags(index)
+        tipo = index.data(ROL_TIPO)
+        if tipo in {"feed", "carpeta"}:
+            flags |= Qt.ItemFlag.ItemIsDragEnabled
+        if tipo == "carpeta":
+            flags |= Qt.ItemFlag.ItemIsDropEnabled
+        return flags
+
+    def supportedDropActions(self):
+        return Qt.DropAction.MoveAction
+
+    def mimeTypes(self):
+        return [self.MIME]
+
+    def mimeData(self, indexes):
+        mime = QMimeData()
+        nodes = {(i.data(ROL_TIPO), i.data(ROL_ID)) for i in indexes if i.isValid()}
+        if len(nodes) == 1:
+            tipo, ident = nodes.pop()
+            if tipo in {"feed", "carpeta"}:
+                mime.setData(self.MIME, json.dumps([id(self), tipo, ident]).encode())
+        return mime
+
+    def _drop_source(self, data):
+        try:
+            owner, tipo, ident = json.loads(bytes(data.data(self.MIME)))
+            if owner == id(self) and tipo in {"feed", "carpeta"}:
+                return self.indice_de(tipo, ident)
+        except (ValueError, TypeError):
+            pass
+        return QModelIndex()
+
+    def canDropMimeData(self, data, action, row, column, parent):
+        if action != Qt.DropAction.MoveAction or column > 0 or row < -1:
+            return False
+        source = self._drop_source(data)
+        if not source.isValid():
+            return False
+        if parent.isValid() and parent.data(ROL_TIPO) != "carpeta":
+            return False
+        if row > self.rowCount(parent):
+            return False
+        ancestor = parent
+        while ancestor.isValid():
+            if ancestor == source:
+                return False
+            ancestor = ancestor.parent()
+        return True
+
+    def dropMimeData(self, data, action, row, column, parent):
+        if not self.canDropMimeData(data, action, row, column, parent):
+            return False
+        source = self._drop_source(data)
+        node = source.internalPointer()
+        old = node.padre
+        dest = parent.internalPointer() if parent.isValid() else self.raiz
+        if row == -1:
+            row = len(dest.hijos)
+        if dest is self.raiz:
+            last = len(dest.hijos) - int(dest.hijos[-1].id == "__inteligentes")
+            row = max(1, min(row, last))
+        old_row = source.row()
+        if old is dest and row in {old_row, old_row + 1}:
+            return False
+        target_row = row - int(old is dest and old_row < row)
+        siblings = [n for n in dest.hijos if n is not node]
+        siblings.insert(target_row, node)
+        try:
+            self.conn.execute("SAVEPOINT desktop_drop")
+            if old is not dest:
+                if node.tipo == "carpeta":
+                    repo.move_folder(self.conn, node.id, dest.id or None)
+                else:
+                    feed = repo.get_feed(self.conn, node.id)
+                    if feed is None or feed.deleted:
+                        raise ValueError("La fuente ya no existe")
+                    if dest.id:
+                        folder = repo.get_folder(self.conn, dest.id)
+                        if folder is None or folder.deleted:
+                            raise ValueError("La carpeta ya no existe")
+                    repo.set_feed_folder(self.conn, node.id, dest.id or None)
+            repo.set_desktop_tree_order(self.conn, dest.id or None,
+                                       [n.id for n in siblings if n.tipo in {"feed", "carpeta"}])
+            self.conn.execute("RELEASE desktop_drop")
+        except (ValueError, sqlite3.Error) as exc:
+            self.conn.execute("ROLLBACK TO desktop_drop")
+            self.conn.execute("RELEASE desktop_drop")
+            self.error_movimiento.emit(str(exc))
+            return False
+        self.beginMoveRows(source.parent(), old_row, old_row, parent, row)
+        old.hijos.remove(node)
+        dest.hijos.insert(target_row, node)
+        node.padre = dest
+        self.endMoveRows()
+        self.actualizar_contadores()
+        self.movido.emit()
+        return True
 
     def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
         if role == Qt.ItemDataRole.DisplayRole and orientation == Qt.Orientation.Horizontal:
